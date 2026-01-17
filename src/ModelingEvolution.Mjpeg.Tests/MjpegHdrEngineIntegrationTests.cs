@@ -11,70 +11,8 @@ using Xunit.Abstractions;
 namespace ModelingEvolution.Mjpeg.Tests;
 
 /// <summary>
-/// IJpegCodec implementation using Emgu.CV (OpenCV) for testing.
-/// </summary>
-internal sealed class EmguJpegCodec : IJpegCodec
-{
-    public int Quality { get; set; } = 85;
-    public DctMethod DctMethod { get; set; } = DctMethod.Integer;
-
-    public FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
-    {
-        using var mat = new Mat();
-        CvInvoke.Imdecode(jpegData.ToArray(), ImreadModes.Grayscale, mat);
-
-        var header = new FrameHeader(mat.Width, mat.Height, mat.Step, PixelFormat.Gray8, mat.Width * mat.Height);
-        var data = new byte[header.Length];
-        Marshal.Copy(mat.DataPointer, data, 0, data.Length);
-        data.CopyTo(outputBuffer);
-        return header;
-    }
-
-    public FrameImage Decode(ReadOnlyMemory<byte> jpegData)
-    {
-        using var mat = new Mat();
-        CvInvoke.Imdecode(jpegData.ToArray(), ImreadModes.Grayscale, mat);
-
-        var header = new FrameHeader(mat.Width, mat.Height, mat.Step, PixelFormat.Gray8, mat.Width * mat.Height);
-        var data = new byte[header.Length];
-        Marshal.Copy(mat.DataPointer, data, 0, data.Length);
-        return new FrameImage(header, data);
-    }
-
-    public int Encode(in FrameImage frame, Memory<byte> outputBuffer)
-    {
-        var data = frame.Data.ToArray();
-        using var mat = new Mat(frame.Header.Height, frame.Header.Width, DepthType.Cv8U, 1);
-        Marshal.Copy(data, 0, mat.DataPointer, data.Length);
-
-        using var buf = new VectorOfByte();
-        CvInvoke.Imencode(".jpg", mat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, Quality));
-
-        var encoded = buf.ToArray();
-        encoded.CopyTo(outputBuffer);
-        return encoded.Length;
-    }
-
-    public FrameImage Encode(in FrameImage frame)
-    {
-        var data = frame.Data.ToArray();
-        using var mat = new Mat(frame.Header.Height, frame.Header.Width, DepthType.Cv8U, 1);
-        Marshal.Copy(data, 0, mat.DataPointer, data.Length);
-
-        using var buf = new VectorOfByte();
-        CvInvoke.Imencode(".jpg", mat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, Quality));
-
-        var encoded = buf.ToArray();
-        var header = new FrameHeader(frame.Header.Width, frame.Header.Height, encoded.Length, PixelFormat.Gray8, encoded.Length);
-        return new FrameImage(header, encoded);
-    }
-
-    public void Dispose() { }
-}
-
-/// <summary>
-/// Integration tests for MjpegHdrEngine using real JPEG encoding/decoding with Emgu.CV.
-/// Tests verify HDR blending produces sensible results with different weight configurations.
+/// Integration tests for MjpegHdrEngine using real JPEG encoding/decoding with LibJpegWrap.
+/// Uses Emgu.CV only for creating test images. Tests verify HDR blending produces sensible results.
 /// </summary>
 [Trait("Category", "Integration")]
 public class MjpegHdrEngineIntegrationTests
@@ -155,7 +93,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -214,7 +152,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -273,7 +211,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] linearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -288,7 +226,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] inverseLinearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -356,7 +294,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -416,7 +354,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] averageResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -430,7 +368,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] weightedResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new EmguJpegCodec(),
+            new JpegCodec(),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -507,7 +445,7 @@ public class MjpegHdrEngineIntegrationTests
         {
             using var engine = new MjpegHdrEngine(
                 GetImage,
-                new EmguJpegCodec(),
+                new JpegCodec(),
                 new HdrBlend(),
                 MemoryPool<byte>.Shared);
 

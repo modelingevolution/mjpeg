@@ -56,6 +56,12 @@ public sealed class JpegCodec : IJpegCodec
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern int GetJpegImageInfo(nint jpegData, ulong jpegSize, out DecodeInfo info);
 
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong EncodeGray8ToJpeg(nint grayData, int width, int height, int quality, nint output, ulong outputSize);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong DecodeJpegToI420(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct DecodeInfo
     {
@@ -131,6 +137,20 @@ public sealed class JpegCodec : IJpegCodec
     }
 
     /// <inheritdoc/>
+    public unsafe FrameHeader GetImageInfo(ReadOnlyMemory<byte> jpegData)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var inputHandle = jpegData.Pin();
+        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        if (result == 0)
+            throw new InvalidOperationException("Failed to read JPEG header.");
+
+        var outputSize = info.Width * info.Height;
+        return new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.Gray8, outputSize);
+    }
+
+    /// <inheritdoc/>
     public unsafe FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -184,29 +204,105 @@ public sealed class JpegCodec : IJpegCodec
     }
 
     /// <inheritdoc/>
+    public unsafe FrameHeader DecodeI420(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var inputHandle = jpegData.Pin();
+        using var outputHandle = outputBuffer.Pin();
+
+        var bytesWritten = DecodeJpegToI420(
+            (nint)inputHandle.Pointer,
+            (ulong)jpegData.Length,
+            (nint)outputHandle.Pointer,
+            (ulong)outputBuffer.Length,
+            out var info);
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to decode JPEG image to I420.");
+
+        // I420 length = width * height * 1.5
+        int i420Length = info.Width * info.Height * 3 / 2;
+        return new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.I420, i420Length);
+    }
+
+    /// <inheritdoc/>
+    public unsafe FrameImage DecodeI420(ReadOnlyMemory<byte> jpegData)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // First get dimensions
+        using var inputHandle = jpegData.Pin();
+
+        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        if (result == 0)
+            throw new InvalidOperationException("Failed to read JPEG header.");
+
+        // Allocate output buffer for I420 (width * height * 1.5)
+        int outputSize = info.Width * info.Height * 3 / 2;
+        var output = new byte[outputSize];
+
+        using var outputHandle = output.AsMemory().Pin();
+
+        var bytesWritten = DecodeJpegToI420(
+            (nint)inputHandle.Pointer,
+            (ulong)jpegData.Length,
+            (nint)outputHandle.Pointer,
+            (ulong)outputSize,
+            out info);
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to decode JPEG image to I420.");
+
+        var header = new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.I420, (int)bytesWritten);
+        return new FrameImage(header, output);
+    }
+
+    /// <inheritdoc/>
     public unsafe int Encode(in FrameImage frame, Memory<byte> outputBuffer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (frame.Header.Format != PixelFormat.I420)
-        {
-            throw new NotSupportedException(
-                $"Only I420 (YUV420) format is currently supported. Got: {frame.Header.Format}");
-        }
-
         using var inputHandle = frame.Data.Pin();
         using var outputHandle = outputBuffer.Pin();
 
+        return frame.Header.Format switch
+        {
+            PixelFormat.I420 => EncodeI420(inputHandle, outputHandle, outputBuffer.Length),
+            PixelFormat.Gray8 => EncodeGray8(frame.Header, inputHandle, outputHandle, outputBuffer.Length),
+            _ => throw new NotSupportedException(
+                $"Only I420 and Gray8 formats are supported. Got: {frame.Header.Format}")
+        };
+    }
+
+    private unsafe int EncodeI420(MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
+    {
         lock (_lock)
         {
             ulong bytesWritten = OnEncode(
                 _encoderPtr,
                 (nint)inputHandle.Pointer,
                 (nint)outputHandle.Pointer,
-                (ulong)outputBuffer.Length);
+                (ulong)outputLength);
 
             return (int)bytesWritten;
         }
+    }
+
+    private unsafe int EncodeGray8(FrameHeader header, MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
+    {
+        ulong bytesWritten = EncodeGray8ToJpeg(
+            (nint)inputHandle.Pointer,
+            header.Width,
+            header.Height,
+            _quality,
+            (nint)outputHandle.Pointer,
+            (ulong)outputLength);
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to encode Gray8 image to JPEG.");
+
+        return (int)bytesWritten;
     }
 
     /// <inheritdoc/>

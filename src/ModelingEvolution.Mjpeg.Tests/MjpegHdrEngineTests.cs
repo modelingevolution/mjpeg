@@ -14,6 +14,14 @@ internal sealed class MockJpegCodec : IJpegCodec
 
     public int DecodeCallCount { get; private set; }
     public int EncodeCallCount { get; private set; }
+    public int GetImageInfoCallCount { get; private set; }
+
+    public FrameHeader GetImageInfo(ReadOnlyMemory<byte> jpegData)
+    {
+        GetImageInfoCallCount++;
+        // Return 2x2 Gray8 frame info
+        return new FrameHeader(2, 2, 2, PixelFormat.Gray8, 4);
+    }
 
     public FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
     {
@@ -38,6 +46,37 @@ internal sealed class MockJpegCodec : IJpegCodec
         {
             data[i] = (byte)(100 + i);
         }
+        return new FrameImage(header, data);
+    }
+
+    public FrameHeader DecodeI420(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        DecodeCallCount++;
+        // Return a simple 2x2 I420 frame (Y=4 bytes, U=1 byte, V=1 byte)
+        var header = new FrameHeader(2, 2, 2, PixelFormat.I420, 6);
+        var span = outputBuffer.Span;
+        // Y plane
+        for (int i = 0; i < 4; i++)
+            span[i] = (byte)(100 + i);
+        // U plane
+        span[4] = 128;
+        // V plane
+        span[5] = 128;
+        return header;
+    }
+
+    public FrameImage DecodeI420(ReadOnlyMemory<byte> jpegData)
+    {
+        DecodeCallCount++;
+        var header = new FrameHeader(2, 2, 2, PixelFormat.I420, 6);
+        var data = new byte[6];
+        // Y plane
+        for (int i = 0; i < 4; i++)
+            data[i] = (byte)(100 + i);
+        // U plane
+        data[4] = 128;
+        // V plane
+        data[5] = 128;
         return new FrameImage(header, data);
     }
 

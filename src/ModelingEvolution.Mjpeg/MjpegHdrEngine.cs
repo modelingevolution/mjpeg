@@ -161,11 +161,31 @@ public sealed class MjpegHdrEngine : IDisposable
 
     private async Task<FrameImage> FetchAndDecodeOneFrameAsync(ulong frameId)
     {
-        // Fetch JPEG data
+        // Fetch JPEG data (pooled)
         using var jpegOwner = await _getImageByFrameId(frameId);
 
-        // Decode immediately (runs in parallel with other fetch+decode tasks)
-        return _codec.Decode(jpegOwner.Memory);
+        // Get dimensions to know how much to rent
+        var info = _codec.GetImageInfo(jpegOwner.Memory);
+
+        // Calculate I420 size: width * height * 1.5
+        int i420Size = info.Width * info.Height * 3 / 2;
+
+        // Rent decode buffer from pool
+        var decodeOwner = _pool.Rent(i420Size);
+        try
+        {
+            // Decode to I420 into pooled buffer (preserves color)
+            var header = _codec.DecodeI420(jpegOwner.Memory, decodeOwner.Memory);
+
+            // Return FrameImage that owns the pooled memory
+            // Will be disposed in GetAsync finally block, returning buffer to pool
+            return new FrameImage(header, decodeOwner);
+        }
+        catch
+        {
+            decodeOwner.Dispose();
+            throw;
+        }
     }
 
     private FrameImage BlendFrames(FrameImage[] frames)

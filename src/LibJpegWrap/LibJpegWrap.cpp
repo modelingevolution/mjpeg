@@ -299,6 +299,133 @@ ulong DecodeToGray(const byte* jpegData, ulong jpegSize, byte* output, ulong out
     return totalSize;
 }
 
+// Decode JPEG to I420 (YUV 4:2:0 planar) for HDR blending with color
+// Returns: bytes written to output, or 0 on error
+// Output format: Y plane (width*height), U plane (width*height/4), V plane (width*height/4)
+ulong DecodeToI420(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+
+    jpeg_memory_src(&cinfo, jpegData, jpegSize);
+
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    // Request raw YUV output (planar, subsampled)
+    cinfo.raw_data_out = TRUE;
+    cinfo.out_color_space = JCS_YCbCr;
+
+    jpeg_start_decompress(&cinfo);
+
+    int width = cinfo.output_width;
+    int height = cinfo.output_height;
+
+    info->width = width;
+    info->height = height;
+    info->components = 3;
+    info->colorSpace = cinfo.out_color_space;
+
+    // I420 size: Y (width*height) + U (width*height/4) + V (width*height/4)
+    ulong sizeY = width * height;
+    ulong sizeU = sizeY / 4;
+    ulong sizeV = sizeU;
+    ulong totalSize = sizeY + sizeU + sizeV;
+
+    if (totalSize > outputSize) {
+        jpeg_abort_decompress(&cinfo);
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    byte* Y = output;
+    byte* U = output + sizeY;
+    byte* V = output + sizeY + sizeU;
+
+    // Read raw data in MCU rows (typically 16 lines for Y, 8 for U/V with 4:2:0)
+    JSAMPROW y_rows[16];
+    JSAMPROW u_rows[8];
+    JSAMPROW v_rows[8];
+    JSAMPARRAY planes[3] = { y_rows, u_rows, v_rows };
+
+    int y_stride = width;
+    int uv_stride = width / 2;
+
+    while (cinfo.output_scanline < cinfo.output_height) {
+        int lines_to_read = cinfo.output_height - cinfo.output_scanline;
+        if (lines_to_read > 16) lines_to_read = 16;
+
+        for (int i = 0; i < 16; i++) {
+            int y_line = cinfo.output_scanline + i;
+            if (y_line < height) {
+                y_rows[i] = Y + y_line * y_stride;
+            } else {
+                y_rows[i] = Y + (height - 1) * y_stride; // Pad with last line
+            }
+
+            if (i < 8) {
+                int uv_line = (cinfo.output_scanline / 2) + i;
+                if (uv_line < height / 2) {
+                    u_rows[i] = U + uv_line * uv_stride;
+                    v_rows[i] = V + uv_line * uv_stride;
+                } else {
+                    u_rows[i] = U + (height / 2 - 1) * uv_stride;
+                    v_rows[i] = V + (height / 2 - 1) * uv_stride;
+                }
+            }
+        }
+
+        jpeg_read_raw_data(&cinfo, planes, 16);
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+
+    return totalSize;
+}
+
+// Encode grayscale (Gray8) to JPEG
+// Returns: bytes written to output, or 0 on error
+ulong EncodeGray8(const byte* grayData, int width, int height, int quality, byte* output, ulong outputSize) {
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    // Set up memory destination
+    memory_destination_mgr* dest = jpeg_memory_dest(&cinfo, output, outputSize);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 1;
+    cinfo.in_color_space = JCS_GRAYSCALE;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+
+    jpeg_start_compress(&cinfo, TRUE);
+
+    JSAMPROW row_pointer[1];
+    int row_stride = width;
+
+    while (cinfo.next_scanline < cinfo.image_height) {
+        row_pointer[0] = (JSAMPROW)&grayData[cinfo.next_scanline * row_stride];
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+
+    ulong dataSize = dest->data_size;
+    jpeg_destroy_compress(&cinfo);
+
+    return dataSize;
+}
+
 // Get JPEG dimensions without full decode
 int GetJpegInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
     struct jpeg_decompress_struct cinfo;
@@ -350,5 +477,13 @@ extern "C" {
 
     EXPORT int GetJpegImageInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
         return GetJpegInfo(jpegData, jpegSize, info);
+    }
+
+    EXPORT ulong EncodeGray8ToJpeg(const byte* grayData, int width, int height, int quality, byte* output, ulong outputSize) {
+        return EncodeGray8(grayData, width, height, quality, output, outputSize);
+    }
+
+    EXPORT ulong DecodeJpegToI420(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+        return DecodeToI420(jpegData, jpegSize, output, outputSize, info);
     }
 }

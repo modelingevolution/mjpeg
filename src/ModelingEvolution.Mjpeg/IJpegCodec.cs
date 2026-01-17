@@ -19,7 +19,14 @@ public enum DctMethod : byte
 public interface IJpegCodec : IDisposable
 {
     /// <summary>
-    /// Decodes JPEG data to raw pixel data.
+    /// Gets image dimensions from JPEG header without full decode.
+    /// </summary>
+    /// <param name="jpegData">The JPEG compressed data.</param>
+    /// <returns>Frame header with dimensions (Length will be width*height for Gray8).</returns>
+    FrameHeader GetImageInfo(ReadOnlyMemory<byte> jpegData);
+
+    /// <summary>
+    /// Decodes JPEG data to grayscale (Gray8).
     /// </summary>
     /// <param name="jpegData">The JPEG compressed data.</param>
     /// <param name="outputBuffer">Buffer to receive decoded pixels. Must be large enough.</param>
@@ -27,11 +34,26 @@ public interface IJpegCodec : IDisposable
     FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer);
 
     /// <summary>
-    /// Decodes JPEG data, allocating output buffer.
+    /// Decodes JPEG data to grayscale (Gray8), allocating output buffer.
     /// </summary>
     /// <param name="jpegData">The JPEG compressed data.</param>
     /// <returns>FrameImage containing the decoded pixels. Caller must dispose.</returns>
     FrameImage Decode(ReadOnlyMemory<byte> jpegData);
+
+    /// <summary>
+    /// Decodes JPEG data to I420 (YUV 4:2:0 planar) format.
+    /// </summary>
+    /// <param name="jpegData">The JPEG compressed data.</param>
+    /// <param name="outputBuffer">Buffer to receive decoded pixels. Must be large enough (width*height*1.5).</param>
+    /// <returns>Frame header describing the decoded image.</returns>
+    FrameHeader DecodeI420(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer);
+
+    /// <summary>
+    /// Decodes JPEG data to I420 (YUV 4:2:0 planar) format, allocating output buffer.
+    /// </summary>
+    /// <param name="jpegData">The JPEG compressed data.</param>
+    /// <returns>FrameImage containing the decoded pixels in I420 format. Caller must dispose.</returns>
+    FrameImage DecodeI420(ReadOnlyMemory<byte> jpegData);
 
     /// <summary>
     /// Encodes raw frame to JPEG.
