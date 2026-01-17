@@ -6,14 +6,17 @@ namespace ModelingEvolution.Mjpeg;
 /// </summary>
 public enum HdrBlendMode : byte
 {
+    /// <summary>No HDR processing, passthrough single frames.</summary>
+    None = 0,
+
     /// <summary>Equal weight for all frames. GST_HDR_BLEND_MODE_AVERAGE.</summary>
-    Average = 0,
+    Average = 1,
 
     /// <summary>Per-luminance weighted blending using Q0.8 weights. GST_HDR_BLEND_MODE_WEIGHTED.</summary>
-    Weighted = 1,
+    Weighted = 2,
 
     /// <summary>Map 3 Gray8 frames to RGB channels. GST_HDR_BLEND_MODE_GRAY8_2_RGB.</summary>
-    GrayToRgb = 2
+    GrayToRgb = 3
 }
 
 /// <summary>
