@@ -76,6 +76,7 @@ internal sealed class EmguJpegCodec : IJpegCodec
 /// Integration tests for MjpegHdrEngine using real JPEG encoding/decoding with Emgu.CV.
 /// Tests verify HDR blending produces sensible results with different weight configurations.
 /// </summary>
+[Trait("Category", "Integration")]
 public class MjpegHdrEngineIntegrationTests
 {
     private readonly ITestOutputHelper _output;

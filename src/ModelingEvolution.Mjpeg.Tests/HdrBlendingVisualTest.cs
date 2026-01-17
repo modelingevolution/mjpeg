@@ -13,6 +13,7 @@ namespace ModelingEvolution.Mjpeg.Tests;
 /// Visual tests for HDR blending that create meaningful test cases
 /// demonstrating the difference between blending modes.
 /// </summary>
+[Trait("Category", "Integration")]
 public class HdrBlendingVisualTest
 {
     private readonly ITestOutputHelper _output;

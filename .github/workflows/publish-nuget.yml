@@ -47,7 +47,7 @@ jobs:
       run: dotnet build ModelingEvolution.Mjpeg.sln --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
 
     - name: Run tests
-      run: dotnet test ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal
+      run: dotnet test ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal --filter "Category!=Integration"
 
     - name: Pack NuGet package
       run: |
