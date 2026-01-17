@@ -11,21 +11,14 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-get_current_version() {
+get_latest_version() {
     local latest_tag=$(git tag -l "v*" | sort -V | tail -1)
-
     if [ -n "$latest_tag" ]; then
         echo "${latest_tag#v}"
     else
-        local csproj_version=$(grep -oP '(?<=<Version>)[^<]+' src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj 2>/dev/null || echo "")
-        if [ -n "$csproj_version" ]; then
-            echo "$csproj_version"
-        else
-            echo "1.0.0"
-        fi
+        echo "0.0.0"
     fi
 }
 
@@ -34,7 +27,7 @@ calculate_next_version() {
     local bump_type=$2
 
     IFS='.' read -ra VERSION_PARTS <<< "$current_version"
-    local major="${VERSION_PARTS[0]:-1}"
+    local major="${VERSION_PARTS[0]:-0}"
     local minor="${VERSION_PARTS[1]:-0}"
     local patch="${VERSION_PARTS[2]:-0}"
 
@@ -51,26 +44,9 @@ calculate_next_version() {
         patch)
             patch=$((patch + 1))
             ;;
-        *)
-            print_error "Unknown bump type: $bump_type"
-            exit 1
-            ;;
     esac
 
     echo "$major.$minor.$patch"
-}
-
-update_csproj_version() {
-    local version=$1
-    local csproj_file="src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj"
-
-    if [ ! -f "$csproj_file" ]; then
-        print_error "Could not find $csproj_file"
-        return 1
-    fi
-
-    print_info "Updating version in $csproj_file to $version"
-    sed -i "s/<Version>.*<\/Version>/<Version>$version<\/Version>/" "$csproj_file"
 }
 
 main() {
@@ -91,21 +67,19 @@ main() {
         esac
     done
 
+    # Must be in a git repo
     if ! git rev-parse --git-dir > /dev/null 2>&1; then
         print_error "Not in a git repository"
         exit 1
     fi
 
+    # Abort if uncommitted changes
     if ! git diff-index --quiet HEAD --; then
-        print_warn "You have uncommitted changes. Continue anyway? (y/N)"
-        read -r response
-        if [[ ! "$response" =~ ^[Yy]$ ]]; then
-            print_info "Aborted"
-            exit 0
-        fi
+        print_error "Uncommitted changes. Commit first."
+        exit 1
     fi
 
-    local current_version=$(get_current_version)
+    local current_version=$(get_latest_version)
     print_info "Current version: $current_version"
 
     local next_version
@@ -114,40 +88,22 @@ main() {
     else
         next_version=$(calculate_next_version "$current_version" "$bump_type")
     fi
-    print_info "Next version ($bump_type bump): $next_version"
-
-    echo ""
-    print_warn "This will:"
-    echo "  1. Update version in .csproj to $next_version"
-    echo "  2. Commit the changes"
-    echo "  3. Create tag: v$next_version"
-    echo "  4. Push changes and tag to origin"
-    echo ""
-    print_warn "Continue? (y/N)"
-    read -r response
-
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        print_info "Aborted"
-        exit 0
-    fi
-
-    update_csproj_version "$next_version"
-
-    print_info "Committing version update..."
-    git add src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
-    git commit -m "Bump version to $next_version"
 
     local tag_name="v$next_version"
-    print_info "Creating tag: $tag_name"
-    git tag -a "$tag_name" -m "Release v$next_version"
 
-    print_info "Pushing to origin..."
-    git push origin HEAD
+    # Check tag doesn't exist
+    if git tag -l "$tag_name" | grep -q "$tag_name"; then
+        print_error "Tag $tag_name already exists"
+        exit 1
+    fi
+
+    print_info "Creating tag: $tag_name"
+    git tag -a "$tag_name" -m "Release $next_version"
+
+    print_info "Pushing tag to origin..."
     git push origin "$tag_name"
 
-    print_info "Successfully created release $next_version"
-    echo ""
-    echo "Monitor progress at: https://github.com/modelingevolution/mjpeg/actions"
+    print_info "Done! Monitor: https://github.com/modelingevolution/mjpeg/actions"
 }
 
 main "$@"
