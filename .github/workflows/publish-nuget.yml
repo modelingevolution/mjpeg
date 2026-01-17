@@ -41,13 +41,13 @@ jobs:
         echo "Publishing version: $VERSION"
 
     - name: Restore dependencies
-      run: dotnet restore src/ModelingEvolution.Mjpeg.sln
+      run: dotnet restore ModelingEvolution.Mjpeg.sln
 
     - name: Build solution
-      run: dotnet build src/ModelingEvolution.Mjpeg.sln --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
+      run: dotnet build ModelingEvolution.Mjpeg.sln --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
 
     - name: Run tests
-      run: dotnet test src/ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal
+      run: dotnet test ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal
 
     - name: Pack NuGet package
       run: |
