@@ -10,10 +10,17 @@ using Xunit.Abstractions;
 namespace ModelingEvolution.Mjpeg.Tests;
 
 /// <summary>
+/// xUnit collection to run integration tests sequentially (Emgu.CV may not be thread-safe)
+/// </summary>
+[CollectionDefinition("Sequential", DisableParallelization = true)]
+public class SequentialCollection { }
+
+/// <summary>
 /// Visual tests for HDR blending that create meaningful test cases
 /// demonstrating the difference between blending modes.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection("Sequential")]
 public class HdrBlendingVisualTest
 {
     private readonly ITestOutputHelper _output;
@@ -61,7 +68,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Average blending
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }), new HdrBlend(), MemoryPool<byte>.Shared))
         {
             engine.HdrMode = HdrBlendMode.Average;
             engine.HdrFrameWindowCount = 2;
@@ -70,7 +77,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Linear weighted blending (dark prefers frame 0, bright prefers frame 1)
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }), new HdrBlend(), MemoryPool<byte>.Shared))
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -80,7 +87,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Inverse Linear weighted blending (dark prefers frame 1, bright prefers frame 0)
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }), new HdrBlend(), MemoryPool<byte>.Shared))
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -160,12 +167,15 @@ public class HdrBlendingVisualTest
         CvInvoke.Imwrite(path, mat);
     }
 
-    private static byte[] EncodeToJpeg(byte[] data, int width, int height)
+    private static byte[] EncodeToJpeg(byte[] grayData, int width, int height)
     {
-        using var mat = new Mat(height, width, DepthType.Cv8U, 1);
-        Marshal.Copy(data, 0, mat.DataPointer, data.Length);
+        // Convert grayscale to BGR (3 channels) for color JPEG encoding
+        using var grayMat = new Mat(height, width, DepthType.Cv8U, 1);
+        Marshal.Copy(grayData, 0, grayMat.DataPointer, grayData.Length);
+        using var bgrMat = new Mat();
+        CvInvoke.CvtColor(grayMat, bgrMat, ColorConversion.Gray2Bgr);
         using var buf = new VectorOfByte();
-        CvInvoke.Imencode(".jpg", mat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, 95));
+        CvInvoke.Imencode(".jpg", bgrMat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, 95));
         return buf.ToArray();
     }
 

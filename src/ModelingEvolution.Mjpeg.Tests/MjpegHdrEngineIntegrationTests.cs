@@ -15,6 +15,7 @@ namespace ModelingEvolution.Mjpeg.Tests;
 /// Uses Emgu.CV only for creating test images. Tests verify HDR blending produces sensible results.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection("Sequential")]
 public class MjpegHdrEngineIntegrationTests
 {
     private readonly ITestOutputHelper _output;
@@ -25,14 +26,15 @@ public class MjpegHdrEngineIntegrationTests
     }
 
     /// <summary>
-    /// Creates a grayscale test image with a white dot at the specified position.
+    /// Creates a color test image with a dot at the specified position.
+    /// Uses BGR format (3 channels) so JPEG encodes as YCbCr for DecodeI420.
     /// </summary>
-    private static byte[] CreateTestImageWithDot(int width, int height, int dotX, int dotY, int dotRadius, byte background = 50, byte dotColor = 200)
+    private byte[] CreateTestImageWithDot(int width, int height, int dotX, int dotY, int dotRadius, byte background = 50, byte dotColor = 200)
     {
-        using var mat = new Mat(height, width, DepthType.Cv8U, 1);
-        mat.SetTo(new MCvScalar(background));
+        using var mat = new Mat(height, width, DepthType.Cv8U, 3); // 3 channels for color
+        mat.SetTo(new MCvScalar(background, background, background));
 
-        CvInvoke.Circle(mat, new System.Drawing.Point(dotX, dotY), dotRadius, new MCvScalar(dotColor), -1);
+        CvInvoke.Circle(mat, new System.Drawing.Point(dotX, dotY), dotRadius, new MCvScalar(dotColor, dotColor, dotColor), -1);
 
         using var buf = new VectorOfByte();
         CvInvoke.Imencode(".jpg", mat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, 95));
@@ -68,6 +70,104 @@ public class MjpegHdrEngineIntegrationTests
     }
 
     [Fact]
+    public void DiagnosticTest_CheckEmguCvLoading()
+    {
+        _output.WriteLine("Step 1: Starting diagnostic test");
+        _output.WriteLine($"Current directory: {Environment.CurrentDirectory}");
+        _output.WriteLine($"libcvextern.so exists: {File.Exists("libcvextern.so")}");
+        _output.WriteLine($"libcvextern.so in app dir: {File.Exists(Path.Combine(AppContext.BaseDirectory, "libcvextern.so"))}");
+
+        _output.WriteLine("Step 2: About to create Emgu.CV Mat...");
+        try
+        {
+            using var mat = new Mat(100, 100, DepthType.Cv8U, 1);
+            _output.WriteLine($"Step 3: Mat created successfully: {mat.Width}x{mat.Height}");
+
+            _output.WriteLine("Step 4: About to set scalar...");
+            mat.SetTo(new MCvScalar(50));
+            _output.WriteLine("Step 5: Scalar set");
+
+            _output.WriteLine("Step 6: About to draw circle...");
+            CvInvoke.Circle(mat, new System.Drawing.Point(50, 50), 10, new MCvScalar(200), -1);
+            _output.WriteLine("Step 7: Circle drawn");
+
+            _output.WriteLine("Step 8: About to encode to JPEG...");
+            using var buf = new VectorOfByte();
+            // Use SAME call as CreateTestImageWithDot - with quality parameter
+            CvInvoke.Imencode(".jpg", mat, buf, new KeyValuePair<ImwriteFlags, int>(ImwriteFlags.JpegQuality, 95));
+            _output.WriteLine($"Step 9: Encoded to {buf.Size} bytes");
+
+            _output.WriteLine("Step 10: About to write image to disk...");
+            var testPath = Path.Combine(Path.GetTempPath(), "emgu_test.jpg");
+            CvInvoke.Imwrite(testPath, mat);
+            _output.WriteLine($"Step 11: Written to {testPath}");
+            File.Delete(testPath);
+            _output.WriteLine("Step 12: Cleaned up");
+
+            _output.WriteLine("Step 13: Creating JpegCodec...");
+            using var codec = new JpegCodec();
+            _output.WriteLine("Step 14: JpegCodec created");
+
+            _output.WriteLine("Step 15: Testing DecodeI420...");
+            var jpegBytes = buf.ToArray();
+            var info = codec.GetImageInfo(jpegBytes);
+            _output.WriteLine($"Step 16: Image info: {info.Width}x{info.Height}");
+
+            int i420Size = info.Width * info.Height * 3 / 2;
+            var decodeBuffer = new byte[i420Size];
+            var header = codec.DecodeI420(jpegBytes, decodeBuffer);
+            _output.WriteLine($"Step 17: Decoded to I420: {header.Width}x{header.Height}, {header.Length} bytes");
+
+            _output.WriteLine("Step 18: Testing CvInvoke.Imdecode...");
+            using var decodedMat = new Mat();
+            CvInvoke.Imdecode(jpegBytes, ImreadModes.Grayscale, decodedMat);
+            _output.WriteLine($"Step 19: Imdecode result: {decodedMat.Width}x{decodedMat.Height}");
+        }
+        catch (Exception ex)
+        {
+            _output.WriteLine($"FAILED - {ex.GetType().Name}: {ex.Message}");
+            if (ex.InnerException != null)
+                _output.WriteLine($"  Inner: {ex.InnerException.Message}");
+            throw;
+        }
+    }
+
+    [Fact]
+    public void DiagnosticTest_EngineFlowStepByStep()
+    {
+        const int width = 100;
+        const int height = 100;
+
+        var frame0Jpeg = CreateTestImageWithDot(width, height, 25, 50, 10, background: 50, dotColor: 200);
+        var frame1Jpeg = CreateTestImageWithDot(width, height, 75, 50, 10, background: 50, dotColor: 200);
+
+        var frames = new Dictionary<ulong, byte[]>
+        {
+            { 0, frame0Jpeg },
+            { 1, frame1Jpeg }
+        };
+
+        Task<IMemoryOwner<byte>> GetImage(ulong frameId)
+        {
+            var jpeg = frames.ContainsKey(frameId) ? frames[frameId] : frames[0];
+            return Task.FromResult(CreateImageMemoryOwner(jpeg));
+        }
+
+        using var engine = new MjpegHdrEngine(
+            GetImage,
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new HdrBlend(),
+            MemoryPool<byte>.Shared);
+
+        engine.HdrMode = HdrBlendMode.Average;
+        engine.HdrFrameWindowCount = 2;
+
+        using var result = engine.Get(1);
+
+        result.Data.Length.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
     public void Average2Frame_DotInDifferentPositions_ShouldShowBothDotsFaded()
     {
         // Arrange: Create two 100x100 images with dots at different positions
@@ -93,7 +193,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -152,7 +252,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -211,7 +311,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] linearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -226,7 +326,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] inverseLinearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -294,7 +394,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -354,7 +454,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] averageResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -368,7 +468,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] weightedResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(),
+            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -445,7 +545,7 @@ public class MjpegHdrEngineIntegrationTests
         {
             using var engine = new MjpegHdrEngine(
                 GetImage,
-                new JpegCodec(),
+                new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
                 new HdrBlend(),
                 MemoryPool<byte>.Shared);
 

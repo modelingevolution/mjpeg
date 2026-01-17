@@ -6,12 +6,14 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Enable legacy RID graph for Emgu.CV ubuntu-x64 package -->
+    <UseRidGraph>true</UseRidGraph>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
-    <PackageReference Include="Emgu.CV" Version="4.10.0.5680" />
-    <PackageReference Include="Emgu.CV.runtime.ubuntu-x64" Version="4.10.0.5680" />
+    <PackageReference Include="Emgu.CV" Version="4.6.0.5131" />
+    <PackageReference Include="Emgu.CV.runtime.ubuntu-x64" Version="4.6.0.5131" />
     <PackageReference Include="FluentAssertions" Version="8.3.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -20,6 +22,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ModelingEvolution.Mjpeg\ModelingEvolution.Mjpeg.csproj" />
+  </ItemGroup>
+
+  <!-- Copy Emgu.CV native library manually (workaround for .NET 8+ RID graph) -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <None Include="$(NuGetPackageRoot)emgu.cv.runtime.ubuntu-x64/4.6.0.5131/runtimes/ubuntu-x64/native/libcvextern.so">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libcvextern.so</Link>
+    </None>
   </ItemGroup>
 
   <!-- Copy native libraries to output for tests -->
