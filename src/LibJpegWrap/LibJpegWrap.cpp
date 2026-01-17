@@ -195,6 +195,133 @@ public:
 };
 typedef struct YuvEncoder YuvEncoder;
 
+// Memory source manager for decompression
+typedef struct {
+    struct jpeg_source_mgr pub;
+    const byte* buffer;
+    ulong buffer_size;
+} memory_source_mgr;
+
+void init_source(j_decompress_ptr cinfo) {
+    // No initialization needed
+}
+
+boolean fill_input_buffer(j_decompress_ptr cinfo) {
+    // Should not be called since we provide all data upfront
+    return FALSE;
+}
+
+void skip_input_data(j_decompress_ptr cinfo, long num_bytes) {
+    memory_source_mgr* src = (memory_source_mgr*)cinfo->src;
+    if (num_bytes > 0) {
+        src->pub.next_input_byte += num_bytes;
+        src->pub.bytes_in_buffer -= num_bytes;
+    }
+}
+
+void term_source(j_decompress_ptr cinfo) {
+    // No cleanup needed
+}
+
+void jpeg_memory_src(j_decompress_ptr cinfo, const byte* buffer, ulong size) {
+    memory_source_mgr* src;
+
+    if (cinfo->src == nullptr) {
+        cinfo->src = (struct jpeg_source_mgr*)
+            (*cinfo->mem->alloc_small)((j_common_ptr)cinfo, JPOOL_PERMANENT,
+                sizeof(memory_source_mgr));
+    }
+
+    src = (memory_source_mgr*)cinfo->src;
+    src->pub.init_source = init_source;
+    src->pub.fill_input_buffer = fill_input_buffer;
+    src->pub.skip_input_data = skip_input_data;
+    src->pub.resync_to_restart = jpeg_resync_to_restart;
+    src->pub.term_source = term_source;
+    src->buffer = buffer;
+    src->buffer_size = size;
+    src->pub.next_input_byte = buffer;
+    src->pub.bytes_in_buffer = size;
+}
+
+// Decoder result structure
+typedef struct {
+    int width;
+    int height;
+    int components;
+    int colorSpace;
+} DecodeInfo;
+
+// Decode JPEG to grayscale (for HDR blending)
+// Returns: bytes written to output, or 0 on error
+// Output format: 8-bit grayscale, row-major
+ulong DecodeToGray(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+
+    jpeg_memory_src(&cinfo, jpegData, jpegSize);
+
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    // Request grayscale output
+    cinfo.out_color_space = JCS_GRAYSCALE;
+
+    jpeg_start_decompress(&cinfo);
+
+    info->width = cinfo.output_width;
+    info->height = cinfo.output_height;
+    info->components = cinfo.output_components;
+    info->colorSpace = cinfo.out_color_space;
+
+    ulong rowStride = cinfo.output_width * cinfo.output_components;
+    ulong totalSize = rowStride * cinfo.output_height;
+
+    if (totalSize > outputSize) {
+        jpeg_abort_decompress(&cinfo);
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    while (cinfo.output_scanline < cinfo.output_height) {
+        byte* rowPtr = output + cinfo.output_scanline * rowStride;
+        jpeg_read_scanlines(&cinfo, &rowPtr, 1);
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+
+    return totalSize;
+}
+
+// Get JPEG dimensions without full decode
+int GetJpegInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+
+    jpeg_memory_src(&cinfo, jpegData, jpegSize);
+
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    info->width = cinfo.image_width;
+    info->height = cinfo.image_height;
+    info->components = cinfo.num_components;
+    info->colorSpace = cinfo.jpeg_color_space;
+
+    jpeg_destroy_decompress(&cinfo);
+    return 1;
+}
 
 extern "C" {
     EXPORT YuvEncoder* Create(int width, int height, int quality, ulong size) {
@@ -214,5 +341,14 @@ extern "C" {
     EXPORT void Close(YuvEncoder* encoder)
 	{
         delete encoder;
+    }
+
+    // Decode functions
+    EXPORT ulong DecodeJpegToGray(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+        return DecodeToGray(jpegData, jpegSize, output, outputSize, info);
+    }
+
+    EXPORT int GetJpegImageInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
+        return GetJpegInfo(jpegData, jpegSize, info);
     }
 }

@@ -140,4 +140,82 @@ public class JpegCodecTests
 
         act.Should().Throw<ObjectDisposedException>();
     }
+
+    [Fact]
+    public void Decode_ValidJpeg_ShouldReturnGrayscaleImage()
+    {
+        using var codec = new JpegCodec(new JpegCodecOptions
+        {
+            MaxWidth = 64,
+            MaxHeight = 64,
+            Quality = 80
+        });
+
+        // Create a 64x64 I420 frame and encode it
+        int width = 64;
+        int height = 64;
+        int ySize = width * height;
+        int uvSize = (width / 2) * (height / 2);
+        int totalSize = ySize + uvSize * 2;
+
+        var frameData = new byte[totalSize];
+        for (int i = 0; i < ySize; i++)
+            frameData[i] = (byte)(i % 256);
+        for (int i = ySize; i < totalSize; i++)
+            frameData[i] = 128;
+
+        var header = new FrameHeader(width, height, width, PixelFormat.I420, totalSize);
+        var frame = new FrameImage(header, frameData);
+
+        var jpegBuffer = new byte[totalSize * 2];
+        var jpegSize = codec.Encode(frame, jpegBuffer);
+        var jpegData = jpegBuffer.AsMemory(0, jpegSize);
+
+        // Decode
+        var decoded = codec.Decode(jpegData);
+
+        decoded.Header.Width.Should().Be(width);
+        decoded.Header.Height.Should().Be(height);
+        decoded.Header.Format.Should().Be(PixelFormat.Gray8);
+        decoded.Data.Length.Should().Be(width * height);
+    }
+
+    [Fact]
+    public void Decode_ToBuffer_ShouldFillOutputBuffer()
+    {
+        using var codec = new JpegCodec(new JpegCodecOptions
+        {
+            MaxWidth = 64,
+            MaxHeight = 64,
+            Quality = 80
+        });
+
+        // Create and encode a frame
+        int width = 64;
+        int height = 64;
+        int ySize = width * height;
+        int uvSize = (width / 2) * (height / 2);
+        int totalSize = ySize + uvSize * 2;
+
+        var frameData = new byte[totalSize];
+        for (int i = 0; i < ySize; i++)
+            frameData[i] = (byte)(i % 256);
+        for (int i = ySize; i < totalSize; i++)
+            frameData[i] = 128;
+
+        var header = new FrameHeader(width, height, width, PixelFormat.I420, totalSize);
+        var frame = new FrameImage(header, frameData);
+
+        var jpegBuffer = new byte[totalSize * 2];
+        var jpegSize = codec.Encode(frame, jpegBuffer);
+        var jpegData = jpegBuffer.AsMemory(0, jpegSize);
+
+        // Decode to pre-allocated buffer
+        var outputBuffer = new byte[width * height];
+        var decodedHeader = codec.Decode(jpegData, outputBuffer);
+
+        decodedHeader.Width.Should().Be(width);
+        decodedHeader.Height.Should().Be(height);
+        decodedHeader.Format.Should().Be(PixelFormat.Gray8);
+    }
 }

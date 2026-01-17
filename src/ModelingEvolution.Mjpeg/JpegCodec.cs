@@ -50,6 +50,21 @@ public sealed class JpegCodec : IJpegCodec
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern void SetQuality(nint encoder, int quality);
 
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong DecodeJpegToGray(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int GetJpegImageInfo(nint jpegData, ulong jpegSize, out DecodeInfo info);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DecodeInfo
+    {
+        public int Width;
+        public int Height;
+        public int Components;
+        public int ColorSpace;
+    }
+
     /// <summary>
     /// Creates a new JpegCodec with default options.
     /// </summary>
@@ -116,26 +131,56 @@ public sealed class JpegCodec : IJpegCodec
     }
 
     /// <inheritdoc/>
-    public FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    public unsafe FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
     {
-        // TODO: Implement JPEG decoding when native library supports it
-        // For now, extract dimensions from JPEG header and throw
-        var (width, height) = JpegDimensionExtractor.Extract(jpegData.Span);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
-        throw new NotImplementedException(
-            "JPEG decoding not yet implemented in native library. " +
-            $"Image dimensions: {width}x{height}");
+        using var inputHandle = jpegData.Pin();
+        using var outputHandle = outputBuffer.Pin();
+
+        var bytesWritten = DecodeJpegToGray(
+            (nint)inputHandle.Pointer,
+            (ulong)jpegData.Length,
+            (nint)outputHandle.Pointer,
+            (ulong)outputBuffer.Length,
+            out var info);
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to decode JPEG image.");
+
+        return new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.Gray8, (int)bytesWritten);
     }
 
     /// <inheritdoc/>
-    public FrameImage Decode(ReadOnlyMemory<byte> jpegData)
+    public unsafe FrameImage Decode(ReadOnlyMemory<byte> jpegData)
     {
-        // TODO: Implement JPEG decoding when native library supports it
-        var (width, height) = JpegDimensionExtractor.Extract(jpegData.Span);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
-        throw new NotImplementedException(
-            "JPEG decoding not yet implemented in native library. " +
-            $"Image dimensions: {width}x{height}");
+        // First get dimensions
+        using var inputHandle = jpegData.Pin();
+
+        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        if (result == 0)
+            throw new InvalidOperationException("Failed to read JPEG header.");
+
+        // Allocate output buffer for grayscale
+        var outputSize = info.Width * info.Height;
+        var output = new byte[outputSize];
+
+        using var outputHandle = output.AsMemory().Pin();
+
+        var bytesWritten = DecodeJpegToGray(
+            (nint)inputHandle.Pointer,
+            (ulong)jpegData.Length,
+            (nint)outputHandle.Pointer,
+            (ulong)outputSize,
+            out info);
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to decode JPEG image.");
+
+        var header = new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.Gray8, (int)bytesWritten);
+        return new FrameImage(header, output);
     }
 
     /// <inheritdoc/>
