@@ -28,3 +28,9 @@ TestResults/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Benchmark artifacts
+src/ModelingEvolution.Mjpeg.Benchmarks/BenchmarkDotNet.Artifacts/
+
+# Test output
+test-output/

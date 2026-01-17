@@ -1,0 +1,211 @@
+using System.Buffers;
+using System.Runtime.InteropServices;
+
+namespace ModelingEvolution.Mjpeg;
+
+/// <summary>
+/// Options for configuring JpegCodec.
+/// </summary>
+public class JpegCodecOptions
+{
+    /// <summary>Maximum image width to support.</summary>
+    public int MaxWidth { get; set; } = 1920;
+
+    /// <summary>Maximum image height to support.</summary>
+    public int MaxHeight { get; set; } = 1080;
+
+    /// <summary>Default JPEG quality (1-100).</summary>
+    public int Quality { get; set; } = 85;
+
+    /// <summary>DCT algorithm to use.</summary>
+    public DctMethod DctMethod { get; set; } = DctMethod.Integer;
+}
+
+/// <summary>
+/// JPEG encoder/decoder using LibJpegWrap native library.
+/// </summary>
+public sealed class JpegCodec : IJpegCodec
+{
+    private readonly nint _encoderPtr;
+    private readonly object _lock = new();
+    private bool _disposed;
+    private int _quality;
+    private DctMethod _dctMethod;
+
+    // P/Invoke declarations for LibJpegWrap
+    private const string LibraryName = "LibJpegWrap";
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint Create(int width, int height, int quality, ulong bufSize);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "Encode")]
+    private static extern ulong OnEncode(nint encoder, nint data, nint dstBuffer, ulong dstBufferSize);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void Close(nint encoder);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void SetMode(nint encoder, int mode);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void SetQuality(nint encoder, int quality);
+
+    /// <summary>
+    /// Creates a new JpegCodec with default options.
+    /// </summary>
+    public JpegCodec() : this(new JpegCodecOptions())
+    {
+    }
+
+    /// <summary>
+    /// Creates a new JpegCodec with specified options.
+    /// </summary>
+    public JpegCodec(JpegCodecOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        _quality = options.Quality;
+        _dctMethod = options.DctMethod;
+
+        ulong bufferSize = (ulong)(options.MaxWidth * options.MaxHeight * 3 / 2);
+        _encoderPtr = Create(options.MaxWidth, options.MaxHeight, options.Quality, bufferSize);
+
+        if (_encoderPtr == nint.Zero)
+        {
+            throw new InvalidOperationException("Failed to create JPEG encoder. Native library may not be loaded.");
+        }
+
+        SetMode(_encoderPtr, (int)options.DctMethod);
+    }
+
+    /// <inheritdoc/>
+    public int Quality
+    {
+        get => _quality;
+        set
+        {
+            if (value < 1 || value > 100)
+                throw new ArgumentOutOfRangeException(nameof(value), "Quality must be between 1 and 100.");
+
+            if (_quality != value)
+            {
+                _quality = value;
+                lock (_lock)
+                {
+                    SetQuality(_encoderPtr, value);
+                }
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public DctMethod DctMethod
+    {
+        get => _dctMethod;
+        set
+        {
+            if (_dctMethod != value)
+            {
+                _dctMethod = value;
+                lock (_lock)
+                {
+                    SetMode(_encoderPtr, (int)value);
+                }
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public FrameHeader Decode(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        // TODO: Implement JPEG decoding when native library supports it
+        // For now, extract dimensions from JPEG header and throw
+        var (width, height) = JpegDimensionExtractor.Extract(jpegData.Span);
+
+        throw new NotImplementedException(
+            "JPEG decoding not yet implemented in native library. " +
+            $"Image dimensions: {width}x{height}");
+    }
+
+    /// <inheritdoc/>
+    public FrameImage Decode(ReadOnlyMemory<byte> jpegData)
+    {
+        // TODO: Implement JPEG decoding when native library supports it
+        var (width, height) = JpegDimensionExtractor.Extract(jpegData.Span);
+
+        throw new NotImplementedException(
+            "JPEG decoding not yet implemented in native library. " +
+            $"Image dimensions: {width}x{height}");
+    }
+
+    /// <inheritdoc/>
+    public unsafe int Encode(in FrameImage frame, Memory<byte> outputBuffer)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (frame.Header.Format != PixelFormat.I420)
+        {
+            throw new NotSupportedException(
+                $"Only I420 (YUV420) format is currently supported. Got: {frame.Header.Format}");
+        }
+
+        using var inputHandle = frame.Data.Pin();
+        using var outputHandle = outputBuffer.Pin();
+
+        lock (_lock)
+        {
+            ulong bytesWritten = OnEncode(
+                _encoderPtr,
+                (nint)inputHandle.Pointer,
+                (nint)outputHandle.Pointer,
+                (ulong)outputBuffer.Length);
+
+            return (int)bytesWritten;
+        }
+    }
+
+    /// <inheritdoc/>
+    public FrameImage Encode(in FrameImage frame)
+    {
+        // Allocate worst-case buffer size
+        int maxSize = frame.Header.Length;
+        var buffer = new byte[maxSize];
+
+        int length = Encode(frame, buffer);
+
+        // Create header for JPEG data (not really a frame, but stores the data)
+        var header = new FrameHeader(
+            frame.Header.Width,
+            frame.Header.Height,
+            length,  // For JPEG, "stride" is meaningless, use length
+            frame.Header.Format,
+            length);
+
+        // Copy to exact-size array
+        var exactBuffer = new byte[length];
+        buffer.AsSpan(0, length).CopyTo(exactBuffer);
+
+        return new FrameImage(header, exactBuffer);
+    }
+
+    /// <summary>
+    /// Disposes the native encoder resources.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+
+        if (_encoderPtr != nint.Zero)
+        {
+            Close(_encoderPtr);
+        }
+
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+
+    ~JpegCodec()
+    {
+        Dispose();
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "libjpegwrap",
+  "version": "1.0.0",
+  "description": "Native JPEG encode/decode wrapper using libjpeg-turbo",
+  "dependencies": [
+    "libjpeg-turbo"
+  ]
+}
