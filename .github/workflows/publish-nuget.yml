@@ -1,0 +1,45 @@
+name: Publish NuGet Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Extract version from tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Restore dependencies
+      run: dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
+
+    - name: Build
+      run: dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj -c Release --no-restore
+
+    - name: Run Tests
+      run: dotnet test src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj -c Release
+
+    - name: Pack
+      run: dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj -c Release --no-build -o ./nupkgs -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+
+    - name: Push to NuGet.org
+      run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Publish to ModelingEvolution NuGet
+      run: |
+        dotnet nuget push "./nupkgs/*.nupkg" \
+          --api-key ${{ secrets.NUGET_API_KEY_ME }} \
+          --source https://nuget.modelingevolution.com/v3/index.json \
+          --skip-duplicate
+      continue-on-error: true

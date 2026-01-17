@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
+
+    - name: Build
+      run: dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj -c Release --no-restore
+
+    - name: Run Tests
+      run: dotnet test src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj -c Release --logger "console;verbosity=normal"
