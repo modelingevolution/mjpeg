@@ -20,23 +20,26 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
   </ItemGroup>
 
-  <!-- Native library binaries -->
+  <!-- Native library binaries - packed to runtimes/{rid}/native/ -->
   <ItemGroup>
-    <None Update="libs\win\LibJpegWrap.dll">
+    <Content Include="libs\win\LibJpegWrap.dll">
+      <Link>runtimes\win-x64\native\LibJpegWrap.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Pack>true</Pack>
       <PackagePath>runtimes\win-x64\native</PackagePath>
-    </None>
-    <None Update="libs\linux-x64\LibJpegWrap.so">
+    </Content>
+    <Content Include="libs\linux-x64\LibJpegWrap.so">
+      <Link>runtimes\linux-x64\native\LibJpegWrap.so</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Pack>true</Pack>
       <PackagePath>runtimes\linux-x64\native</PackagePath>
-    </None>
-    <None Update="libs\linux-arm64\LibJpegWrap.so">
+    </Content>
+    <Content Include="libs\linux-arm64\LibJpegWrap.so">
+      <Link>runtimes\linux-arm64\native\LibJpegWrap.so</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Pack>true</Pack>
       <PackagePath>runtimes\linux-arm64\native</PackagePath>
-    </None>
+    </Content>
   </ItemGroup>
 
 </Project>
