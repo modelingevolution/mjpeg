@@ -63,7 +63,6 @@ public sealed class HdrWeights
     /// <summary>
     /// Creates a weight matrix from existing weights array.
     /// </summary>
-    [JsonConstructor]
     public HdrWeights(byte[] weights, int numFrames, int channels)
     {
         if (numFrames < 2 || numFrames > 10)
@@ -82,7 +81,9 @@ public sealed class HdrWeights
 
     /// <summary>
     /// Creates a weight matrix from existing immutable weights array.
+    /// Used for JSON deserialization.
     /// </summary>
+    [JsonConstructor]
     public HdrWeights(ImmutableArray<byte> weights, int numFrames, int channels)
     {
         if (numFrames < 2 || numFrames > 10)
