@@ -4,42 +4,80 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.1.1)'
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: '9.0.x'
 
 jobs:
-  build-and-publish:
+  publish:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '10.0.x'
+        dotnet-version: 9.0.x
 
-    - name: Extract version from tag
+    - name: Set version
       id: version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Publishing version: $VERSION"
 
     - name: Restore dependencies
-      run: dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
+      run: dotnet restore src/ModelingEvolution.Mjpeg.sln
 
-    - name: Build
-      run: dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj -c Release --no-restore
+    - name: Build solution
+      run: dotnet build src/ModelingEvolution.Mjpeg.sln --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
 
-    - name: Run Tests
-      run: dotnet test src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj -c Release
+    - name: Run tests
+      run: dotnet test src/ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal
 
-    - name: Pack
-      run: dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj -c Release --no-build -o ./nupkgs -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+    - name: Pack NuGet package
+      run: |
+        dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj \
+          --configuration Release \
+          --no-build \
+          --output ./artifacts \
+          /p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
-    - name: Push to NuGet.org
-      run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+    - name: List artifacts
+      run: ls -lh ./artifacts
+
+    - name: Publish to NuGet.org
+      run: |
+        dotnet nuget push "./artifacts/*.nupkg" \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
 
     - name: Publish to ModelingEvolution NuGet
       run: |
-        dotnet nuget push "./nupkgs/*.nupkg" \
+        dotnet nuget push "./artifacts/*.nupkg" \
           --api-key ${{ secrets.NUGET_API_KEY_ME }} \
           --source https://nuget.modelingevolution.com/v3/index.json \
           --skip-duplicate
       continue-on-error: true
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-package-${{ steps.version.outputs.VERSION }}
+        path: ./artifacts/*.nupkg
+        retention-days: 30
