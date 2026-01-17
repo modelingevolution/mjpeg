@@ -13,6 +13,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install native dependencies
+      run: sudo apt-get update && sudo apt-get install -y libjpeg8 libjpeg8-dev
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:

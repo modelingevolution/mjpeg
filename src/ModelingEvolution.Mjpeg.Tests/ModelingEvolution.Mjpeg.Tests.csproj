@@ -22,4 +22,19 @@
     <ProjectReference Include="..\ModelingEvolution.Mjpeg\ModelingEvolution.Mjpeg.csproj" />
   </ItemGroup>
 
+  <!-- Copy native libraries to output for tests -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <None Include="..\ModelingEvolution.Mjpeg\libs\linux-x64\LibJpegWrap.so" Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'X64'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\ModelingEvolution.Mjpeg\libs\linux-arm64\LibJpegWrap.so" Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <None Include="..\ModelingEvolution.Mjpeg\libs\win\LibJpegWrap.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
