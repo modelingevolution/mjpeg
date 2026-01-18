@@ -25,7 +25,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ModelingEvolution.Mjpeg" Version="1.0.0" />
+    <!-- Use PackageReference (not ProjectReference) - CLI is a separate NuGet package
+         that depends on the published ModelingEvolution.Mjpeg library.
+         DO NOT change to ProjectReference - this breaks the dotnet tool packaging. -->
+    <PackageReference Include="ModelingEvolution.Mjpeg" Version="1.*" />
     <PackageReference Include="System.CommandLine" Version="2.0.2" />
 
     <!-- EmguCV for MP4 conversion -->
