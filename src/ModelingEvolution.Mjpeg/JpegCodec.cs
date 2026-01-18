@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Runtime.InteropServices;
 
 namespace ModelingEvolution.Mjpeg;
 
@@ -23,6 +22,8 @@ public class JpegCodecOptions
 
 /// <summary>
 /// JPEG encoder/decoder using LibJpegWrap native library.
+/// Standalone codec for direct encode/decode operations.
+/// For HDR processing with parallel decode, use JpegCodecPool instead.
 /// </summary>
 public sealed class JpegCodec : IJpegCodec
 {
@@ -31,60 +32,6 @@ public sealed class JpegCodec : IJpegCodec
     private bool _disposed;
     private int _quality;
     private DctMethod _dctMethod;
-
-    // P/Invoke declarations for LibJpegWrap
-    private const string LibraryName = "LibJpegWrap";
-
-    // Encoder functions
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern nint Create(int width, int height, int quality, ulong bufSize);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "Encode")]
-    private static extern ulong OnEncode(nint encoder, nint data, nint dstBuffer, ulong dstBufferSize);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void Close(nint encoder);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void SetMode(nint encoder, int mode);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void SetQuality(nint encoder, int quality);
-
-    // Pooled decoder functions
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern nint CreateDecoder(int maxWidth, int maxHeight);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong DecoderDecodeI420(nint decoder, nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong DecoderDecodeGray(nint decoder, nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void CloseDecoder(nint decoder);
-
-    // Legacy non-pooled functions (kept for GetImageInfo)
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong DecodeJpegToGray(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int GetJpegImageInfo(nint jpegData, ulong jpegSize, out DecodeInfo info);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong EncodeGray8ToJpeg(nint grayData, int width, int height, int quality, nint output, ulong outputSize);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong DecodeJpegToI420(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DecodeInfo
-    {
-        public int Width;
-        public int Height;
-        public int Components;
-        public int ColorSpace;
-    }
 
     /// <summary>
     /// Creates a new JpegCodec with default options.
@@ -104,21 +51,21 @@ public sealed class JpegCodec : IJpegCodec
         _dctMethod = options.DctMethod;
 
         ulong bufferSize = (ulong)(options.MaxWidth * options.MaxHeight * 3 / 2);
-        _encoderPtr = Create(options.MaxWidth, options.MaxHeight, options.Quality, bufferSize);
+        _encoderPtr = JpegTurboNative.Create(options.MaxWidth, options.MaxHeight, options.Quality, bufferSize);
 
         if (_encoderPtr == nint.Zero)
         {
             throw new InvalidOperationException("Failed to create JPEG encoder. Native library may not be loaded.");
         }
 
-        SetMode(_encoderPtr, (int)options.DctMethod);
+        JpegTurboNative.SetMode(_encoderPtr, (int)options.DctMethod);
 
         // Create pooled decoder
-        _decoderPtr = CreateDecoder(options.MaxWidth, options.MaxHeight);
+        _decoderPtr = JpegTurboNative.CreateDecoder(options.MaxWidth, options.MaxHeight);
 
         if (_decoderPtr == nint.Zero)
         {
-            Close(_encoderPtr);
+            JpegTurboNative.Close(_encoderPtr);
             throw new InvalidOperationException("Failed to create JPEG decoder. Native library may not be loaded.");
         }
     }
@@ -135,7 +82,7 @@ public sealed class JpegCodec : IJpegCodec
             if (_quality != value)
             {
                 _quality = value;
-                SetQuality(_encoderPtr, value);
+                JpegTurboNative.SetQuality(_encoderPtr, value);
             }
         }
     }
@@ -149,7 +96,7 @@ public sealed class JpegCodec : IJpegCodec
             if (_dctMethod != value)
             {
                 _dctMethod = value;
-                SetMode(_encoderPtr, (int)value);
+                JpegTurboNative.SetMode(_encoderPtr, (int)value);
             }
         }
     }
@@ -160,7 +107,7 @@ public sealed class JpegCodec : IJpegCodec
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         using var inputHandle = jpegData.Pin();
-        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        var result = JpegTurboNative.GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
         if (result == 0)
             throw new InvalidOperationException("Failed to read JPEG header.");
 
@@ -176,7 +123,7 @@ public sealed class JpegCodec : IJpegCodec
         using var inputHandle = jpegData.Pin();
         using var outputHandle = outputBuffer.Pin();
 
-        var bytesWritten = DecoderDecodeGray(
+        var bytesWritten = JpegTurboNative.DecoderDecodeGray(
             _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
@@ -198,7 +145,7 @@ public sealed class JpegCodec : IJpegCodec
         // First get dimensions
         using var inputHandle = jpegData.Pin();
 
-        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        var result = JpegTurboNative.GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
         if (result == 0)
             throw new InvalidOperationException("Failed to read JPEG header.");
 
@@ -208,7 +155,7 @@ public sealed class JpegCodec : IJpegCodec
 
         using var outputHandle = output.AsMemory().Pin();
 
-        var bytesWritten = DecoderDecodeGray(
+        var bytesWritten = JpegTurboNative.DecoderDecodeGray(
             _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
@@ -231,7 +178,7 @@ public sealed class JpegCodec : IJpegCodec
         using var inputHandle = jpegData.Pin();
         using var outputHandle = outputBuffer.Pin();
 
-        var bytesWritten = DecoderDecodeI420(
+        var bytesWritten = JpegTurboNative.DecoderDecodeI420(
             _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
@@ -255,7 +202,7 @@ public sealed class JpegCodec : IJpegCodec
         // First get dimensions
         using var inputHandle = jpegData.Pin();
 
-        var result = GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
+        var result = JpegTurboNative.GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var info);
         if (result == 0)
             throw new InvalidOperationException("Failed to read JPEG header.");
 
@@ -265,7 +212,7 @@ public sealed class JpegCodec : IJpegCodec
 
         using var outputHandle = output.AsMemory().Pin();
 
-        var bytesWritten = DecoderDecodeI420(
+        var bytesWritten = JpegTurboNative.DecoderDecodeI420(
             _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
@@ -299,7 +246,7 @@ public sealed class JpegCodec : IJpegCodec
 
     private unsafe int EncodeI420(MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
     {
-        ulong bytesWritten = OnEncode(
+        ulong bytesWritten = JpegTurboNative.Encode(
             _encoderPtr,
             (nint)inputHandle.Pointer,
             (nint)outputHandle.Pointer,
@@ -310,7 +257,7 @@ public sealed class JpegCodec : IJpegCodec
 
     private unsafe int EncodeGray8(FrameHeader header, MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
     {
-        ulong bytesWritten = EncodeGray8ToJpeg(
+        ulong bytesWritten = JpegTurboNative.EncodeGray8ToJpeg(
             (nint)inputHandle.Pointer,
             header.Width,
             header.Height,
@@ -354,12 +301,12 @@ public sealed class JpegCodec : IJpegCodec
 
         if (_encoderPtr != nint.Zero)
         {
-            Close(_encoderPtr);
+            JpegTurboNative.Close(_encoderPtr);
         }
 
         if (_decoderPtr != nint.Zero)
         {
-            CloseDecoder(_decoderPtr);
+            JpegTurboNative.CloseDecoder(_decoderPtr);
         }
 
         _disposed = true;
