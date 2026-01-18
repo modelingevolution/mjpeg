@@ -252,6 +252,176 @@ typedef struct {
     int colorSpace;
 } DecodeInfo;
 
+// Pooled I420 Decoder - reuses jpeg_decompress_struct across calls
+class I420Decoder {
+public:
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    int max_width;
+    int max_height;
+    bool initialized;
+
+    I420Decoder(int maxWidth, int maxHeight)
+        : max_width(maxWidth), max_height(maxHeight), initialized(false)
+    {
+        cinfo.err = jpeg_std_error(&jerr);
+        jpeg_create_decompress(&cinfo);
+        initialized = true;
+    }
+
+    ~I420Decoder()
+    {
+        if (initialized) {
+            jpeg_destroy_decompress(&cinfo);
+            initialized = false;
+        }
+    }
+
+    ulong DecodeI420(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info)
+    {
+        // Set up memory source
+        if (cinfo.src == nullptr) {
+            cinfo.src = (struct jpeg_source_mgr*)
+                (*cinfo.mem->alloc_small)((j_common_ptr)&cinfo, JPOOL_PERMANENT,
+                    sizeof(memory_source_mgr));
+        }
+
+        memory_source_mgr* src = (memory_source_mgr*)cinfo.src;
+        src->pub.init_source = init_source;
+        src->pub.fill_input_buffer = fill_input_buffer;
+        src->pub.skip_input_data = skip_input_data;
+        src->pub.resync_to_restart = jpeg_resync_to_restart;
+        src->pub.term_source = term_source;
+        src->buffer = jpegData;
+        src->buffer_size = jpegSize;
+        src->pub.next_input_byte = jpegData;
+        src->pub.bytes_in_buffer = jpegSize;
+
+        if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+            return 0;
+        }
+
+        // Request raw YUV output
+        cinfo.raw_data_out = TRUE;
+        cinfo.out_color_space = JCS_YCbCr;
+
+        jpeg_start_decompress(&cinfo);
+
+        int width = cinfo.output_width;
+        int height = cinfo.output_height;
+
+        info->width = width;
+        info->height = height;
+        info->components = 3;
+        info->colorSpace = cinfo.out_color_space;
+
+        // I420 size
+        ulong sizeY = width * height;
+        ulong sizeU = sizeY / 4;
+        ulong sizeV = sizeU;
+        ulong totalSize = sizeY + sizeU + sizeV;
+
+        if (totalSize > outputSize) {
+            jpeg_abort_decompress(&cinfo);
+            return 0;
+        }
+
+        byte* Y = output;
+        byte* U = output + sizeY;
+        byte* V = output + sizeY + sizeU;
+
+        JSAMPROW y_rows[16];
+        JSAMPROW u_rows[8];
+        JSAMPROW v_rows[8];
+        JSAMPARRAY planes[3] = { y_rows, u_rows, v_rows };
+
+        int y_stride = width;
+        int uv_stride = width / 2;
+
+        while (cinfo.output_scanline < cinfo.output_height) {
+            for (int i = 0; i < 16; i++) {
+                int y_line = cinfo.output_scanline + i;
+                if (y_line < height) {
+                    y_rows[i] = Y + y_line * y_stride;
+                } else {
+                    y_rows[i] = Y + (height - 1) * y_stride;
+                }
+
+                if (i < 8) {
+                    int uv_line = (cinfo.output_scanline / 2) + i;
+                    if (uv_line < height / 2) {
+                        u_rows[i] = U + uv_line * uv_stride;
+                        v_rows[i] = V + uv_line * uv_stride;
+                    } else {
+                        u_rows[i] = U + (height / 2 - 1) * uv_stride;
+                        v_rows[i] = V + (height / 2 - 1) * uv_stride;
+                    }
+                }
+            }
+
+            jpeg_read_raw_data(&cinfo, planes, 16);
+        }
+
+        jpeg_finish_decompress(&cinfo);
+
+        return totalSize;
+    }
+
+    ulong DecodeGray(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info)
+    {
+        // Set up memory source
+        if (cinfo.src == nullptr) {
+            cinfo.src = (struct jpeg_source_mgr*)
+                (*cinfo.mem->alloc_small)((j_common_ptr)&cinfo, JPOOL_PERMANENT,
+                    sizeof(memory_source_mgr));
+        }
+
+        memory_source_mgr* src = (memory_source_mgr*)cinfo.src;
+        src->pub.init_source = init_source;
+        src->pub.fill_input_buffer = fill_input_buffer;
+        src->pub.skip_input_data = skip_input_data;
+        src->pub.resync_to_restart = jpeg_resync_to_restart;
+        src->pub.term_source = term_source;
+        src->buffer = jpegData;
+        src->buffer_size = jpegSize;
+        src->pub.next_input_byte = jpegData;
+        src->pub.bytes_in_buffer = jpegSize;
+
+        if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+            return 0;
+        }
+
+        // Request grayscale output
+        cinfo.out_color_space = JCS_GRAYSCALE;
+        cinfo.raw_data_out = FALSE;
+
+        jpeg_start_decompress(&cinfo);
+
+        info->width = cinfo.output_width;
+        info->height = cinfo.output_height;
+        info->components = cinfo.output_components;
+        info->colorSpace = cinfo.out_color_space;
+
+        ulong rowStride = cinfo.output_width * cinfo.output_components;
+        ulong totalSize = rowStride * cinfo.output_height;
+
+        if (totalSize > outputSize) {
+            jpeg_abort_decompress(&cinfo);
+            return 0;
+        }
+
+        while (cinfo.output_scanline < cinfo.output_height) {
+            byte* rowPtr = output + cinfo.output_scanline * rowStride;
+            jpeg_read_scanlines(&cinfo, &rowPtr, 1);
+        }
+
+        jpeg_finish_decompress(&cinfo);
+
+        return totalSize;
+    }
+};
+typedef struct I420Decoder I420Decoder;
+
 // Decode JPEG to grayscale (for HDR blending)
 // Returns: bytes written to output, or 0 on error
 // Output format: 8-bit grayscale, row-major
@@ -485,5 +655,22 @@ extern "C" {
 
     EXPORT ulong DecodeJpegToI420(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
         return DecodeToI420(jpegData, jpegSize, output, outputSize, info);
+    }
+
+    // Pooled decoder functions
+    EXPORT I420Decoder* CreateDecoder(int maxWidth, int maxHeight) {
+        return new I420Decoder(maxWidth, maxHeight);
+    }
+
+    EXPORT ulong DecoderDecodeI420(I420Decoder* decoder, const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+        return decoder->DecodeI420(jpegData, jpegSize, output, outputSize, info);
+    }
+
+    EXPORT ulong DecoderDecodeGray(I420Decoder* decoder, const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+        return decoder->DecodeGray(jpegData, jpegSize, output, outputSize, info);
+    }
+
+    EXPORT void CloseDecoder(I420Decoder* decoder) {
+        delete decoder;
     }
 }

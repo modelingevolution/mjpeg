@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Emgu.CV;
 using Emgu.CV.CvEnum;
 using Emgu.CV.Structure;
@@ -155,7 +156,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -193,7 +194,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -252,7 +253,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -311,7 +312,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] linearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -326,7 +327,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] inverseLinearResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -394,7 +395,7 @@ public class MjpegHdrEngineIntegrationTests
 
         using var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -454,7 +455,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] averageResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -468,7 +469,7 @@ public class MjpegHdrEngineIntegrationTests
         byte[] weightedResult;
         using (var engine = new MjpegHdrEngine(
             GetImage,
-            new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+            new JpegCodecPool(width, height),
             new HdrBlend(),
             MemoryPool<byte>.Shared))
         {
@@ -545,7 +546,7 @@ public class MjpegHdrEngineIntegrationTests
         {
             using var engine = new MjpegHdrEngine(
                 GetImage,
-                new JpegCodec(new JpegCodecOptions { MaxWidth = width, MaxHeight = height }),
+                new JpegCodecPool(width, height),
                 new HdrBlend(),
                 MemoryPool<byte>.Shared);
 
@@ -562,6 +563,287 @@ public class MjpegHdrEngineIntegrationTests
 
         _output.WriteLine($"\nTest images saved to: {outputDir}");
         _output.WriteLine("Open the folder to visually inspect the blending results.");
+    }
+
+    [Fact]
+    public void RealRecording_Frame0_ShouldReturnSameAsInput()
+    {
+        // Arrange: Load real recording
+        const string recordingPath = "/mnt/d/tmp/recordings/hdr_rb.20260117T145144.929486Z";
+        var jsonPath = Path.Combine(recordingPath, "stream.json");
+        var mjpegPath = Path.Combine(recordingPath, "stream.mjpeg");
+
+        if (!File.Exists(jsonPath) || !File.Exists(mjpegPath))
+        {
+            _output.WriteLine($"Recording not found at {recordingPath}, skipping test");
+            return;
+        }
+
+        // Parse JSON index
+        var json = File.ReadAllText(jsonPath);
+        var doc = JsonDocument.Parse(json);
+        var index = doc.RootElement.GetProperty("Index");
+
+        // Read frame 0 info
+        var frame0Info = index.GetProperty("0");
+        var frame0Start = frame0Info.GetProperty("s").GetInt64();
+        var frame0Size = frame0Info.GetProperty("sz").GetInt32();
+
+        _output.WriteLine($"Frame 0: offset={frame0Start}, size={frame0Size}");
+
+        // Read frame data from MJPEG file
+        using var fs = File.OpenRead(mjpegPath);
+        var frameCache = new Dictionary<ulong, byte[]>();
+
+        Task<IMemoryOwner<byte>> GetImage(ulong frameId)
+        {
+            if (!frameCache.TryGetValue(frameId, out var data))
+            {
+                var frameKey = frameId.ToString();
+                if (!index.TryGetProperty(frameKey, out var frameInfo))
+                {
+                    frameKey = "0"; // Fallback to frame 0
+                    frameInfo = index.GetProperty(frameKey);
+                }
+
+                var start = frameInfo.GetProperty("s").GetInt64();
+                var size = frameInfo.GetProperty("sz").GetInt32();
+
+                data = new byte[size];
+                fs.Seek(start, SeekOrigin.Begin);
+                fs.ReadExactly(data);
+                frameCache[frameId] = data;
+            }
+
+            return Task.FromResult(CreateImageMemoryOwner(data));
+        }
+
+        // Get original frame 0 for comparison
+        var originalFrame0 = new byte[frame0Size];
+        fs.Seek(frame0Start, SeekOrigin.Begin);
+        fs.ReadExactly(originalFrame0);
+
+        // Create engine with 1024x1024 (from JSON caps)
+        using var engine = new MjpegHdrEngine(
+            GetImage,
+            new JpegCodecPool(1024, 1024),
+            new HdrBlend(),
+            MemoryPool<byte>.Shared);
+
+        engine.HdrMode = HdrBlendMode.Average;
+        engine.HdrFrameWindowCount = 2;
+
+        // Act: Get frame 0 (should blend frame 0 with itself)
+        using var result = engine.Get(0);
+
+        _output.WriteLine($"Original frame 0 size: {originalFrame0.Length}");
+        _output.WriteLine($"HDR result size: {result.Data.Length}");
+
+        // Decode both and compare
+        using var originalMat = new Mat();
+        CvInvoke.Imdecode(originalFrame0, ImreadModes.Grayscale, originalMat);
+
+        using var resultMat = new Mat();
+        CvInvoke.Imdecode(result.Data.ToArray(), ImreadModes.Grayscale, resultMat);
+
+        _output.WriteLine($"Original dimensions: {originalMat.Width}x{originalMat.Height}");
+        _output.WriteLine($"Result dimensions: {resultMat.Width}x{resultMat.Height}");
+
+        // Compare pixel values - should be very similar since we blend frame 0 with itself
+        var originalData = new byte[originalMat.Width * originalMat.Height];
+        var resultData = new byte[resultMat.Width * resultMat.Height];
+        originalMat.CopyTo(originalData);
+        resultMat.CopyTo(resultData);
+
+        // Calculate average absolute difference
+        long totalDiff = 0;
+        for (int i = 0; i < originalData.Length; i++)
+        {
+            totalDiff += Math.Abs(originalData[i] - resultData[i]);
+        }
+        double avgDiff = (double)totalDiff / originalData.Length;
+
+        _output.WriteLine($"Average pixel difference: {avgDiff:F2}");
+
+        // Should be very small (only JPEG recompression differences)
+        avgDiff.Should().BeLessThan(5, "frame 0 blended with itself should be nearly identical to original");
+    }
+
+    [Fact]
+    public void RealRecording_ProcessMultipleFrames_ShouldWork()
+    {
+        // Arrange: Load real recording
+        const string recordingPath = "/mnt/d/tmp/recordings/hdr_rb.20260117T145144.929486Z";
+        var jsonPath = Path.Combine(recordingPath, "stream.json");
+        var mjpegPath = Path.Combine(recordingPath, "stream.mjpeg");
+
+        if (!File.Exists(jsonPath) || !File.Exists(mjpegPath))
+        {
+            _output.WriteLine($"Recording not found at {recordingPath}, skipping test");
+            return;
+        }
+
+        var json = File.ReadAllText(jsonPath);
+        var doc = JsonDocument.Parse(json);
+        var index = doc.RootElement.GetProperty("Index");
+        var framesCount = doc.RootElement.GetProperty("FramesCount").GetInt32();
+
+        _output.WriteLine($"Recording has {framesCount} frames");
+
+        using var fs = File.OpenRead(mjpegPath);
+        var frameCache = new Dictionary<ulong, byte[]>();
+
+        Task<IMemoryOwner<byte>> GetImage(ulong frameId)
+        {
+            if (!frameCache.TryGetValue(frameId, out var data))
+            {
+                var frameKey = frameId.ToString();
+                if (!index.TryGetProperty(frameKey, out var frameInfo))
+                {
+                    frameKey = "0";
+                    frameInfo = index.GetProperty(frameKey);
+                }
+
+                var start = frameInfo.GetProperty("s").GetInt64();
+                var size = frameInfo.GetProperty("sz").GetInt32();
+
+                data = new byte[size];
+                fs.Seek(start, SeekOrigin.Begin);
+                fs.ReadExactly(data);
+                frameCache[frameId] = data;
+            }
+
+            return Task.FromResult(CreateImageMemoryOwner(data));
+        }
+
+        using var engine = new MjpegHdrEngine(
+            GetImage,
+            new JpegCodecPool(1024, 1024),
+            new HdrBlend(),
+            MemoryPool<byte>.Shared);
+
+        engine.HdrMode = HdrBlendMode.Average;
+        engine.HdrFrameWindowCount = 2;
+
+        // Process first 10 frames
+        var framesToProcess = Math.Min(10, framesCount);
+        for (int i = 0; i < framesToProcess; i++)
+        {
+            using var result = engine.Get((ulong)i);
+            _output.WriteLine($"Frame {i}: output size = {result.Data.Length} bytes");
+            result.Data.Length.Should().BeGreaterThan(0);
+        }
+
+        _output.WriteLine($"Successfully processed {framesToProcess} frames");
+    }
+
+    [Fact]
+    public async Task RealRecording_DecodeAllFramesInParallel_8Threads()
+    {
+        // Arrange: Load real recording
+        const string recordingPath = "/mnt/d/tmp/recordings/hdr_rb.20260117T145144.929486Z";
+        var jsonPath = Path.Combine(recordingPath, "stream.json");
+        var mjpegPath = Path.Combine(recordingPath, "stream.mjpeg");
+
+        if (!File.Exists(jsonPath) || !File.Exists(mjpegPath))
+        {
+            _output.WriteLine($"Recording not found at {recordingPath}, skipping test");
+            return;
+        }
+
+        var json = File.ReadAllText(jsonPath);
+        var doc = JsonDocument.Parse(json);
+        var index = doc.RootElement.GetProperty("Index");
+        var framesCount = doc.RootElement.GetProperty("FramesCount").GetInt32();
+
+        _output.WriteLine($"Recording has {framesCount} frames");
+
+        // Pre-load all frame data into memory for parallel access
+        var frameData = new Dictionary<int, byte[]>();
+        using (var fs = File.OpenRead(mjpegPath))
+        {
+            for (int i = 0; i < framesCount; i++)
+            {
+                var frameKey = i.ToString();
+                if (index.TryGetProperty(frameKey, out var frameInfo))
+                {
+                    var start = frameInfo.GetProperty("s").GetInt64();
+                    var size = frameInfo.GetProperty("sz").GetInt32();
+
+                    var data = new byte[size];
+                    fs.Seek(start, SeekOrigin.Begin);
+                    fs.ReadExactly(data);
+                    frameData[i] = data;
+                }
+            }
+        }
+
+        _output.WriteLine($"Pre-loaded {frameData.Count} frames into memory");
+
+        // Process all frames in parallel with 8 threads
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 8 };
+        var processedCount = 0;
+        var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, framesCount),
+            parallelOptions,
+            async (frameIdx, ct) =>
+            {
+                try
+                {
+                    // Each thread needs its own engine (codec is not thread-safe)
+                    Task<IMemoryOwner<byte>> GetImage(ulong frameId)
+                    {
+                        var idx = (int)frameId;
+                        if (idx < 0 || idx >= framesCount)
+                            idx = 0;
+
+                        var data = frameData[idx];
+                        return Task.FromResult(CreateImageMemoryOwner(data));
+                    }
+
+                    using var engine = new MjpegHdrEngine(
+                        GetImage,
+                        new JpegCodecPool(1024, 1024),
+                        new HdrBlend(),
+                        MemoryPool<byte>.Shared);
+
+                    engine.HdrMode = HdrBlendMode.Average;
+                    engine.HdrFrameWindowCount = 2;
+
+                    using var result = await engine.GetAsync((ulong)frameIdx);
+
+                    if (result.Data.Length == 0)
+                    {
+                        errors.Add($"Frame {frameIdx}: empty result");
+                    }
+
+                    Interlocked.Increment(ref processedCount);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"Frame {frameIdx}: {ex.Message}");
+                }
+            });
+
+        sw.Stop();
+
+        _output.WriteLine($"Processed {processedCount} frames in {sw.ElapsedMilliseconds}ms");
+        _output.WriteLine($"Throughput: {processedCount * 1000.0 / sw.ElapsedMilliseconds:F1} frames/sec");
+
+        if (errors.Count > 0)
+        {
+            _output.WriteLine($"Errors ({errors.Count}):");
+            foreach (var error in errors.Take(10))
+            {
+                _output.WriteLine($"  {error}");
+            }
+        }
+
+        processedCount.Should().Be(framesCount, "all frames should be processed successfully");
+        errors.Should().BeEmpty("no errors should occur during parallel processing");
     }
 }
 

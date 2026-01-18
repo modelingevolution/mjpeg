@@ -30,7 +30,11 @@ TestResults/
 Thumbs.db
 
 # Benchmark artifacts
+BenchmarkDotNet.Artifacts/
 src/ModelingEvolution.Mjpeg.Benchmarks/BenchmarkDotNet.Artifacts/
+
+# CMake build artifacts
+src/LibJpegWrap/build/
 
 # Test output
 test-output/

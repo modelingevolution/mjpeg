@@ -7,14 +7,16 @@ namespace ModelingEvolution.Mjpeg;
 /// HDR processing engine for MJPEG streams.
 /// Fetches frames, decodes JPEG, blends using HDR algorithms, and re-encodes to JPEG.
 /// Matches GStreamer gsthdr plugin processing pipeline.
+/// Each engine owns its own codec pool for optimal performance with parallel decode.
 /// </summary>
 public sealed class MjpegHdrEngine : IDisposable
 {
     private readonly Func<ulong, Task<IMemoryOwner<byte>>> _getImageByFrameId;
-    private readonly IJpegCodec _codec;
+    private readonly ICodecPool _codecPool;
     private readonly IHdrBlend _blend;
     private readonly MemoryPool<byte> _pool;
     private bool _disposed;
+    private readonly bool _ownsCodecPool;
 
     /// <summary>
     /// Number of frames to blend (2-10). Matches GStreamer num-frames property.
@@ -34,37 +36,42 @@ public sealed class MjpegHdrEngine : IDisposable
     /// <summary>
     /// JPEG output quality (1-100).
     /// </summary>
-    public int JpegQuality
-    {
-        get => _codec.Quality;
-        set => _codec.Quality = value;
-    }
+    public int JpegQuality => _codecPool.Quality;
 
     /// <summary>
-    /// Creates a new MjpegHdrEngine.
+    /// Creates a new MjpegHdrEngine with default codec pool.
     /// </summary>
     /// <param name="getImageByFrameId">
     /// Async function to fetch JPEG data by frame ID.
     /// Returns IMemoryOwner containing JPEG bytes. Caller takes ownership.
     /// </param>
-    public MjpegHdrEngine(Func<ulong, Task<IMemoryOwner<byte>>> getImageByFrameId)
-        : this(getImageByFrameId, new JpegCodec(), new HdrBlend(), MemoryPool<byte>.Shared)
+    /// <param name="maxWidth">Maximum image width to support.</param>
+    /// <param name="maxHeight">Maximum image height to support.</param>
+    /// <param name="quality">JPEG quality (1-100).</param>
+    public MjpegHdrEngine(
+        Func<ulong, Task<IMemoryOwner<byte>>> getImageByFrameId,
+        int maxWidth = 1920,
+        int maxHeight = 1080,
+        int quality = 85)
+        : this(getImageByFrameId, new JpegCodecPool(maxWidth, maxHeight, quality), new HdrBlend(), MemoryPool<byte>.Shared, ownsCodecPool: true)
     {
     }
 
     /// <summary>
-    /// Creates a new MjpegHdrEngine with custom dependencies.
+    /// Creates a new MjpegHdrEngine with custom codec pool.
     /// </summary>
     public MjpegHdrEngine(
         Func<ulong, Task<IMemoryOwner<byte>>> getImageByFrameId,
-        IJpegCodec codec,
+        ICodecPool codecPool,
         IHdrBlend blend,
-        MemoryPool<byte> pool)
+        MemoryPool<byte> pool,
+        bool ownsCodecPool = false)
     {
         _getImageByFrameId = getImageByFrameId ?? throw new ArgumentNullException(nameof(getImageByFrameId));
-        _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+        _codecPool = codecPool ?? throw new ArgumentNullException(nameof(codecPool));
         _blend = blend ?? throw new ArgumentNullException(nameof(blend));
         _pool = pool ?? throw new ArgumentNullException(nameof(pool));
+        _ownsCodecPool = ownsCodecPool;
     }
 
     /// <summary>
@@ -86,8 +93,8 @@ public sealed class MjpegHdrEngine : IDisposable
             // Blend frames
             using var blendedFrame = BlendFrames(decodedFrames);
 
-            // Encode to JPEG
-            return _codec.Encode(blendedFrame);
+            // Encode to JPEG using pooled encoder
+            return EncodeWithPooledEncoder(blendedFrame);
         }
         finally
         {
@@ -96,6 +103,38 @@ public sealed class MjpegHdrEngine : IDisposable
             {
                 frame.Dispose();
             }
+        }
+    }
+
+    private FrameImage EncodeWithPooledEncoder(FrameImage frame)
+    {
+        var encoder = _codecPool.RentEncoder();
+        try
+        {
+            // Rent output buffer from pool - may be larger than needed
+            int maxSize = frame.Header.Length;
+            var outputOwner = _pool.Rent(maxSize);
+
+            int length = frame.Header.Format switch
+            {
+                PixelFormat.I420 => _codecPool.EncodeI420(encoder, frame.Data, outputOwner.Memory),
+                PixelFormat.Gray8 => _codecPool.EncodeGray8(frame.Header.Width, frame.Header.Height, frame.Data, outputOwner.Memory),
+                _ => throw new NotSupportedException($"Only I420 and Gray8 formats are supported. Got: {frame.Header.Format}")
+            };
+
+            // Create header with actual encoded length
+            var header = new FrameHeader(
+                frame.Header.Width,
+                frame.Header.Height,
+                length,
+                frame.Header.Format,
+                length);
+
+            return new FrameImage(header, outputOwner);
+        }
+        finally
+        {
+            _codecPool.ReturnEncoder(encoder);
         }
     }
 
@@ -125,38 +164,48 @@ public sealed class MjpegHdrEngine : IDisposable
     private async Task<FrameImage[]> FetchAndDecodeFramesAsync(ulong frameId)
     {
         var frameCount = HdrFrameWindowCount;
-        var decodeTasks = new Task<FrameImage>[frameCount];
+        var decodeTasks = ArrayPool<Task<FrameImage>>.Shared.Rent(frameCount);
 
-        // Start fetch + decode tasks in parallel
-        // Each task fetches JPEG data and decodes it, allowing parallel decode operations
-        for (int i = 0; i < frameCount; i++)
+        try
         {
-            ulong targetFrameId = frameId >= (ulong)i ? frameId - (ulong)i : 0;
-            decodeTasks[i] = FetchAndDecodeOneFrameAsync(targetFrameId);
-        }
-
-        // Wait for all parallel fetch+decode operations
-        var frames = await Task.WhenAll(decodeTasks);
-
-        // Validate all frames have same dimensions
-        var firstHeader = frames[0].Header;
-        for (int i = 1; i < frames.Length; i++)
-        {
-            if (frames[i].Header.Width != firstHeader.Width ||
-                frames[i].Header.Height != firstHeader.Height)
+            // Start fetch + decode tasks in parallel
+            for (int i = 0; i < frameCount; i++)
             {
-                // Dispose already decoded frames on error
-                foreach (var frame in frames)
-                {
-                    frame.Dispose();
-                }
-                throw new InvalidOperationException(
-                    $"Frame {i} dimensions ({frames[i].Header.Width}x{frames[i].Header.Height}) " +
-                    $"don't match frame 0 ({firstHeader.Width}x{firstHeader.Height}).");
+                ulong targetFrameId = frameId >= (ulong)i ? frameId - (ulong)i : 0;
+                decodeTasks[i] = FetchAndDecodeOneFrameAsync(targetFrameId);
             }
-        }
 
-        return frames;
+            // Await all and collect results
+            var frames = new FrameImage[frameCount];
+            for (int i = 0; i < frameCount; i++)
+            {
+                frames[i] = await decodeTasks[i];
+            }
+
+            // Validate all frames have same dimensions
+            var firstHeader = frames[0].Header;
+            for (int i = 1; i < frameCount; i++)
+            {
+                if (frames[i].Header.Width != firstHeader.Width ||
+                    frames[i].Header.Height != firstHeader.Height)
+                {
+                    // Dispose already decoded frames on error
+                    foreach (var frame in frames)
+                    {
+                        frame.Dispose();
+                    }
+                    throw new InvalidOperationException(
+                        $"Frame {i} dimensions ({frames[i].Header.Width}x{frames[i].Header.Height}) " +
+                        $"don't match frame 0 ({firstHeader.Width}x{firstHeader.Height}).");
+                }
+            }
+
+            return frames;
+        }
+        finally
+        {
+            ArrayPool<Task<FrameImage>>.Shared.Return(decodeTasks, clearArray: true);
+        }
     }
 
     private async Task<FrameImage> FetchAndDecodeOneFrameAsync(ulong frameId)
@@ -165,17 +214,20 @@ public sealed class MjpegHdrEngine : IDisposable
         using var jpegOwner = await _getImageByFrameId(frameId);
 
         // Get dimensions to know how much to rent
-        var info = _codec.GetImageInfo(jpegOwner.Memory);
+        var info = _codecPool.GetImageInfo(jpegOwner.Memory);
 
         // Calculate I420 size: width * height * 1.5
         int i420Size = info.Width * info.Height * 3 / 2;
 
         // Rent decode buffer from pool
         var decodeOwner = _pool.Rent(i420Size);
+
+        // Rent decoder from pool
+        var decoder = _codecPool.RentDecoder();
         try
         {
             // Decode to I420 into pooled buffer (preserves color)
-            var header = _codec.DecodeI420(jpegOwner.Memory, decodeOwner.Memory);
+            var header = _codecPool.DecodeI420(decoder, jpegOwner.Memory, decodeOwner.Memory);
 
             // Return FrameImage that owns the pooled memory
             // Will be disposed in GetAsync finally block, returning buffer to pool
@@ -185,6 +237,10 @@ public sealed class MjpegHdrEngine : IDisposable
         {
             decodeOwner.Dispose();
             throw;
+        }
+        finally
+        {
+            _codecPool.ReturnDecoder(decoder);
         }
     }
 
@@ -319,7 +375,10 @@ public sealed class MjpegHdrEngine : IDisposable
     {
         if (_disposed) return;
 
-        _codec.Dispose();
+        if (_ownsCodecPool)
+        {
+            _codecPool.Dispose();
+        }
         _disposed = true;
     }
 }

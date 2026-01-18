@@ -5,7 +5,109 @@ using Xunit;
 namespace ModelingEvolution.Mjpeg.Tests;
 
 /// <summary>
-/// Mock IJpegCodec for testing without native library.
+/// Mock ICodecPool for testing without native library.
+/// </summary>
+internal sealed class MockCodecPool : ICodecPool
+{
+    public int MaxWidth { get; } = 1920;
+    public int MaxHeight { get; } = 1080;
+    public int Quality { get; } = 85;
+
+    public int DecodeCallCount { get; private set; }
+    public int EncodeCallCount { get; private set; }
+    public int GetImageInfoCallCount { get; private set; }
+    public int RentEncoderCallCount { get; private set; }
+    public int ReturnEncoderCallCount { get; private set; }
+    public int RentDecoderCallCount { get; private set; }
+    public int ReturnDecoderCallCount { get; private set; }
+
+    private int _nextHandle = 1;
+
+    public nint RentEncoder()
+    {
+        RentEncoderCallCount++;
+        return (nint)(_nextHandle++);
+    }
+
+    public void ReturnEncoder(nint encoder)
+    {
+        ReturnEncoderCallCount++;
+    }
+
+    public nint RentDecoder()
+    {
+        RentDecoderCallCount++;
+        return (nint)(_nextHandle++);
+    }
+
+    public void ReturnDecoder(nint decoder)
+    {
+        ReturnDecoderCallCount++;
+    }
+
+    public FrameHeader GetImageInfo(ReadOnlyMemory<byte> jpegData)
+    {
+        GetImageInfoCallCount++;
+        // Return 2x2 Gray8 frame info
+        return new FrameHeader(2, 2, 2, PixelFormat.Gray8, 4);
+    }
+
+    public FrameHeader DecodeI420(nint decoder, ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        DecodeCallCount++;
+        // Return a simple 2x2 I420 frame (Y=4 bytes, U=1 byte, V=1 byte)
+        var header = new FrameHeader(2, 2, 2, PixelFormat.I420, 6);
+        var span = outputBuffer.Span;
+        // Y plane
+        for (int i = 0; i < 4; i++)
+            span[i] = (byte)(100 + i);
+        // U plane
+        span[4] = 128;
+        // V plane
+        span[5] = 128;
+        return header;
+    }
+
+    public FrameHeader DecodeGray(nint decoder, ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        DecodeCallCount++;
+        // Return a simple 2x2 Gray8 frame
+        var header = new FrameHeader(2, 2, 2, PixelFormat.Gray8, 4);
+        var span = outputBuffer.Span;
+        for (int i = 0; i < Math.Min(4, span.Length); i++)
+        {
+            span[i] = (byte)(100 + i);
+        }
+        return header;
+    }
+
+    public int EncodeI420(nint encoder, ReadOnlyMemory<byte> frameData, Memory<byte> outputBuffer)
+    {
+        EncodeCallCount++;
+        // Write dummy JPEG data
+        var span = outputBuffer.Span;
+        span[0] = 0xFF;
+        span[1] = 0xD8; // JPEG SOI marker
+        return 2;
+    }
+
+    public int EncodeGray8(int width, int height, ReadOnlyMemory<byte> frameData, Memory<byte> outputBuffer)
+    {
+        EncodeCallCount++;
+        // Write dummy JPEG data
+        var span = outputBuffer.Span;
+        span[0] = 0xFF;
+        span[1] = 0xD8; // JPEG SOI marker
+        return 2;
+    }
+
+    public void Dispose()
+    {
+    }
+}
+
+/// <summary>
+/// Mock IJpegCodec for testing without native library (kept for backward compatibility).
 /// </summary>
 internal sealed class MockJpegCodec : IJpegCodec
 {
@@ -116,7 +218,7 @@ public class MjpegHdrEngineTests
     {
         return new MjpegHdrEngine(
             getImage ?? DummyGetImage,
-            new MockJpegCodec(),
+            new MockCodecPool(),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
     }
@@ -135,7 +237,7 @@ public class MjpegHdrEngineTests
     {
         var action = () => new MjpegHdrEngine(
             null!,
-            new MockJpegCodec(),
+            new MockCodecPool(),
             new HdrBlend(),
             MemoryPool<byte>.Shared);
 
@@ -378,32 +480,32 @@ public class MjpegHdrEngineTests
     [Fact]
     public async Task GetAsync_ShouldCallDecodeForEachFrame()
     {
-        var mockCodec = new MockJpegCodec();
+        var mockPool = new MockCodecPool();
         using var engine = new MjpegHdrEngine(
             DummyGetImage,
-            mockCodec,
+            mockPool,
             new HdrBlend(),
             MemoryPool<byte>.Shared);
         engine.HdrFrameWindowCount = 3;
 
         using var result = await engine.GetAsync(10);
 
-        mockCodec.DecodeCallCount.Should().Be(3);
+        mockPool.DecodeCallCount.Should().Be(3);
     }
 
     [Fact]
     public async Task GetAsync_ShouldCallEncodeOnce()
     {
-        var mockCodec = new MockJpegCodec();
+        var mockPool = new MockCodecPool();
         using var engine = new MjpegHdrEngine(
             DummyGetImage,
-            mockCodec,
+            mockPool,
             new HdrBlend(),
             MemoryPool<byte>.Shared);
         engine.HdrFrameWindowCount = 2;
 
         using var result = await engine.GetAsync(10);
 
-        mockCodec.EncodeCallCount.Should().Be(1);
+        mockPool.EncodeCallCount.Should().Be(1);
     }
 }

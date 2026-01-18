@@ -27,7 +27,7 @@ public class JpegCodecOptions
 public sealed class JpegCodec : IJpegCodec
 {
     private readonly nint _encoderPtr;
-    private readonly object _lock = new();
+    private readonly nint _decoderPtr;
     private bool _disposed;
     private int _quality;
     private DctMethod _dctMethod;
@@ -35,6 +35,7 @@ public sealed class JpegCodec : IJpegCodec
     // P/Invoke declarations for LibJpegWrap
     private const string LibraryName = "LibJpegWrap";
 
+    // Encoder functions
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern nint Create(int width, int height, int quality, ulong bufSize);
 
@@ -50,6 +51,20 @@ public sealed class JpegCodec : IJpegCodec
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern void SetQuality(nint encoder, int quality);
 
+    // Pooled decoder functions
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint CreateDecoder(int maxWidth, int maxHeight);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong DecoderDecodeI420(nint decoder, nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong DecoderDecodeGray(nint decoder, nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void CloseDecoder(nint decoder);
+
+    // Legacy non-pooled functions (kept for GetImageInfo)
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern ulong DecodeJpegToGray(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
 
@@ -97,6 +112,15 @@ public sealed class JpegCodec : IJpegCodec
         }
 
         SetMode(_encoderPtr, (int)options.DctMethod);
+
+        // Create pooled decoder
+        _decoderPtr = CreateDecoder(options.MaxWidth, options.MaxHeight);
+
+        if (_decoderPtr == nint.Zero)
+        {
+            Close(_encoderPtr);
+            throw new InvalidOperationException("Failed to create JPEG decoder. Native library may not be loaded.");
+        }
     }
 
     /// <inheritdoc/>
@@ -111,10 +135,7 @@ public sealed class JpegCodec : IJpegCodec
             if (_quality != value)
             {
                 _quality = value;
-                lock (_lock)
-                {
-                    SetQuality(_encoderPtr, value);
-                }
+                SetQuality(_encoderPtr, value);
             }
         }
     }
@@ -128,10 +149,7 @@ public sealed class JpegCodec : IJpegCodec
             if (_dctMethod != value)
             {
                 _dctMethod = value;
-                lock (_lock)
-                {
-                    SetMode(_encoderPtr, (int)value);
-                }
+                SetMode(_encoderPtr, (int)value);
             }
         }
     }
@@ -158,7 +176,8 @@ public sealed class JpegCodec : IJpegCodec
         using var inputHandle = jpegData.Pin();
         using var outputHandle = outputBuffer.Pin();
 
-        var bytesWritten = DecodeJpegToGray(
+        var bytesWritten = DecoderDecodeGray(
+            _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
             (nint)outputHandle.Pointer,
@@ -189,7 +208,8 @@ public sealed class JpegCodec : IJpegCodec
 
         using var outputHandle = output.AsMemory().Pin();
 
-        var bytesWritten = DecodeJpegToGray(
+        var bytesWritten = DecoderDecodeGray(
+            _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
             (nint)outputHandle.Pointer,
@@ -211,7 +231,8 @@ public sealed class JpegCodec : IJpegCodec
         using var inputHandle = jpegData.Pin();
         using var outputHandle = outputBuffer.Pin();
 
-        var bytesWritten = DecodeJpegToI420(
+        var bytesWritten = DecoderDecodeI420(
+            _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
             (nint)outputHandle.Pointer,
@@ -244,7 +265,8 @@ public sealed class JpegCodec : IJpegCodec
 
         using var outputHandle = output.AsMemory().Pin();
 
-        var bytesWritten = DecodeJpegToI420(
+        var bytesWritten = DecoderDecodeI420(
+            _decoderPtr,
             (nint)inputHandle.Pointer,
             (ulong)jpegData.Length,
             (nint)outputHandle.Pointer,
@@ -277,16 +299,13 @@ public sealed class JpegCodec : IJpegCodec
 
     private unsafe int EncodeI420(MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
     {
-        lock (_lock)
-        {
-            ulong bytesWritten = OnEncode(
-                _encoderPtr,
-                (nint)inputHandle.Pointer,
-                (nint)outputHandle.Pointer,
-                (ulong)outputLength);
+        ulong bytesWritten = OnEncode(
+            _encoderPtr,
+            (nint)inputHandle.Pointer,
+            (nint)outputHandle.Pointer,
+            (ulong)outputLength);
 
-            return (int)bytesWritten;
-        }
+        return (int)bytesWritten;
     }
 
     private unsafe int EncodeGray8(FrameHeader header, MemoryHandle inputHandle, MemoryHandle outputHandle, int outputLength)
@@ -308,29 +327,26 @@ public sealed class JpegCodec : IJpegCodec
     /// <inheritdoc/>
     public FrameImage Encode(in FrameImage frame)
     {
-        // Allocate worst-case buffer size
+        // Rent from pool - may be larger than needed
         int maxSize = frame.Header.Length;
-        var buffer = new byte[maxSize];
+        var owner = MemoryPool<byte>.Shared.Rent(maxSize);
 
-        int length = Encode(frame, buffer);
+        int length = Encode(frame, owner.Memory);
 
-        // Create header for JPEG data (not really a frame, but stores the data)
+        // Create header with actual encoded length
         var header = new FrameHeader(
             frame.Header.Width,
             frame.Header.Height,
-            length,  // For JPEG, "stride" is meaningless, use length
+            length,
             frame.Header.Format,
             length);
 
-        // Copy to exact-size array
-        var exactBuffer = new byte[length];
-        buffer.AsSpan(0, length).CopyTo(exactBuffer);
-
-        return new FrameImage(header, exactBuffer);
+        // FrameImage slices to header.Length automatically
+        return new FrameImage(header, owner);
     }
 
     /// <summary>
-    /// Disposes the native encoder resources.
+    /// Disposes the native encoder and decoder resources.
     /// </summary>
     public void Dispose()
     {
@@ -339,6 +355,11 @@ public sealed class JpegCodec : IJpegCodec
         if (_encoderPtr != nint.Zero)
         {
             Close(_encoderPtr);
+        }
+
+        if (_decoderPtr != nint.Zero)
+        {
+            CloseDecoder(_decoderPtr);
         }
 
         _disposed = true;
