@@ -158,7 +158,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         engine.HdrMode = HdrBlendMode.Average;
         engine.HdrFrameWindowCount = 2;
@@ -196,7 +196,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         engine.HdrMode = HdrBlendMode.Average;
         engine.HdrFrameWindowCount = 2;
@@ -255,7 +255,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         // Linear weights: dark pixels prefer frame 0, bright pixels prefer frame 1
         engine.HdrMode = HdrBlendMode.Weighted;
@@ -314,7 +314,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared))
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -329,7 +329,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared))
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -397,7 +397,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         engine.HdrMode = HdrBlendMode.Average;
         engine.HdrFrameWindowCount = 3;
@@ -457,7 +457,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared))
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Average;
             engine.HdrFrameWindowCount = 2;
@@ -471,7 +471,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(width, height),
             new HdrBlend(),
-            MemoryPool<byte>.Shared))
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -548,7 +548,7 @@ public class MjpegHdrEngineIntegrationTests
                 GetImage,
                 new JpegCodecPool(width, height),
                 new HdrBlend(),
-                MemoryPool<byte>.Shared);
+                MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
             engine.HdrMode = mode;
             engine.HdrFrameWindowCount = 2;
@@ -628,7 +628,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(1024, 1024),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         engine.HdrMode = HdrBlendMode.Average;
         engine.HdrFrameWindowCount = 2;
@@ -720,7 +720,7 @@ public class MjpegHdrEngineIntegrationTests
             GetImage,
             new JpegCodecPool(1024, 1024),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         engine.HdrMode = HdrBlendMode.Average;
         engine.HdrFrameWindowCount = 2;
@@ -808,7 +808,7 @@ public class MjpegHdrEngineIntegrationTests
                         GetImage,
                         new JpegCodecPool(1024, 1024),
                         new HdrBlend(),
-                        MemoryPool<byte>.Shared);
+                        MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
                     engine.HdrMode = HdrBlendMode.Average;
                     engine.HdrFrameWindowCount = 2;

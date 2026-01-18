@@ -220,7 +220,7 @@ public class MjpegHdrEngineTests
             getImage ?? DummyGetImage,
             new MockCodecPool(),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class MjpegHdrEngineTests
             null!,
             new MockCodecPool(),
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
 
         action.Should().Throw<ArgumentNullException>();
     }
@@ -485,7 +485,7 @@ public class MjpegHdrEngineTests
             DummyGetImage,
             mockPool,
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
         engine.HdrFrameWindowCount = 3;
 
         using var result = await engine.GetAsync(10);
@@ -501,7 +501,7 @@ public class MjpegHdrEngineTests
             DummyGetImage,
             mockPool,
             new HdrBlend(),
-            MemoryPool<byte>.Shared);
+            MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 };
         engine.HdrFrameWindowCount = 2;
 
         using var result = await engine.GetAsync(10);

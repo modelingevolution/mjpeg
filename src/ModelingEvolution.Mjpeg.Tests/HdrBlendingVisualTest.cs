@@ -68,7 +68,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Average blending
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Average;
             engine.HdrFrameWindowCount = 2;
@@ -77,7 +77,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Linear weighted blending (dark prefers frame 0, bright prefers frame 1)
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
@@ -87,7 +87,7 @@ public class HdrBlendingVisualTest
         }
 
         // Test Inverse Linear weighted blending (dark prefers frame 1, bright prefers frame 0)
-        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared))
+        using (var engine = new MjpegHdrEngine(GetImage, new JpegCodecPool(width, height), new HdrBlend(), MemoryPool<byte>.Shared) { PixelFormat = PixelFormat.I420 })
         {
             engine.HdrMode = HdrBlendMode.Weighted;
             engine.HdrFrameWindowCount = 2;
