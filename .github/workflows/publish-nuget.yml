@@ -12,7 +12,7 @@ on:
         type: string
 
 env:
-  DOTNET_VERSION: '9.0.x'
+  DOTNET_VERSION: '10.0.x'
 
 jobs:
   publish:
@@ -27,7 +27,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 9.0.x
+        dotnet-version: 10.0.x
 
     - name: Set version
       id: version
@@ -49,11 +49,18 @@ jobs:
     - name: Run tests
       run: dotnet test ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal --filter "Category!=Integration"
 
-    - name: Pack NuGet package
+    - name: Pack NuGet package (Library)
       run: |
         dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj \
           --configuration Release \
           --no-build \
+          --output ./artifacts \
+          /p:PackageVersion=${{ steps.version.outputs.VERSION }}
+
+    - name: Pack NuGet package (CLI Tool)
+      run: |
+        dotnet pack src/ModelingEvolution.Mjpeg.Cli/ModelingEvolution.Mjpeg.Cli.csproj \
+          --configuration Release \
           --output ./artifacts \
           /p:PackageVersion=${{ steps.version.outputs.VERSION }}
 

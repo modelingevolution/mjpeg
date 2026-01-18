@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- Dotnet Tool Properties -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>mjpeg-cli</ToolCommandName>
+    <PackageId>ModelingEvolution.Mjpeg.Cli</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>ModelingEvolution</Authors>
+    <Description>MJPEG CLI tool for extracting frames and converting MJPEG recordings to MP4 with HDR support</Description>
+    <PackageProjectUrl>https://github.com/modelingevolution/mjpeg</PackageProjectUrl>
+    <PackageTags>mjpeg;hdr;video;jpeg;mp4;cli</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageOutputPath>./nupkg</PackageOutputPath>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelingEvolution.Mjpeg" Version="1.0.0" />
+    <PackageReference Include="System.CommandLine" Version="2.0.2" />
+
+    <!-- EmguCV for MP4 conversion -->
+    <PackageReference Include="Emgu.CV" Version="4.11.0.5746" />
+    <PackageReference Include="Emgu.CV.runtime.debian-arm64" Version="4.11.0.5746" />
+    <PackageReference Include="Emgu.CV.runtime.ubuntu-x64" Version="4.11.0.5746" />
+    <PackageReference Include="Emgu.CV.runtime.windows" Version="4.11.0.5746" />
+  </ItemGroup>
+
+</Project>
