@@ -1,4 +1,4 @@
-name: Publish NuGet Package
+name: Publish NuGet Library
 
 on:
   push:
@@ -41,26 +41,21 @@ jobs:
         echo "Publishing version: $VERSION"
 
     - name: Restore dependencies
-      run: dotnet restore ModelingEvolution.Mjpeg.sln
+      run: dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
 
-    - name: Build solution
-      run: dotnet build ModelingEvolution.Mjpeg.sln --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
+    - name: Build library
+      run: dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
 
     - name: Run tests
-      run: dotnet test ModelingEvolution.Mjpeg.sln --configuration Release --no-build --verbosity normal --filter "Category!=Integration"
+      run: |
+        dotnet restore src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj
+        dotnet test src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj --configuration Release --verbosity normal --filter "Category!=Integration"
 
-    - name: Pack NuGet package (Library)
+    - name: Pack NuGet package
       run: |
         dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj \
           --configuration Release \
           --no-build \
-          --output ./artifacts \
-          /p:PackageVersion=${{ steps.version.outputs.VERSION }}
-
-    - name: Pack NuGet package (CLI Tool)
-      run: |
-        dotnet pack src/ModelingEvolution.Mjpeg.Cli/ModelingEvolution.Mjpeg.Cli.csproj \
-          --configuration Release \
           --output ./artifacts \
           /p:PackageVersion=${{ steps.version.outputs.VERSION }}
 

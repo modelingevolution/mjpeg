@@ -1,0 +1,67 @@
+name: Publish CLI Tool
+
+# Triggered manually after library is published to NuGet
+# Wait 5-8 minutes after library publish for NuGet indexing
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.2.0)'
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  publish-cli:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Restore CLI dependencies
+      run: dotnet restore src/ModelingEvolution.Mjpeg.Cli/ModelingEvolution.Mjpeg.Cli.csproj
+
+    - name: Build CLI
+      run: dotnet build src/ModelingEvolution.Mjpeg.Cli/ModelingEvolution.Mjpeg.Cli.csproj --configuration Release --no-restore
+
+    - name: Pack CLI Tool
+      run: |
+        dotnet pack src/ModelingEvolution.Mjpeg.Cli/ModelingEvolution.Mjpeg.Cli.csproj \
+          --configuration Release \
+          --output ./artifacts \
+          /p:PackageVersion=${{ github.event.inputs.version }}
+
+    - name: List artifacts
+      run: ls -lh ./artifacts
+
+    - name: Publish to NuGet.org
+      run: |
+        dotnet nuget push "./artifacts/*.nupkg" \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
+
+    - name: Publish to ModelingEvolution NuGet
+      run: |
+        dotnet nuget push "./artifacts/*.nupkg" \
+          --api-key ${{ secrets.NUGET_API_KEY_ME }} \
+          --source https://nuget.modelingevolution.com/v3/index.json \
+          --skip-duplicate
+      continue-on-error: true
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cli-tool-${{ github.event.inputs.version }}
+        path: ./artifacts/*.nupkg
+        retention-days: 30
