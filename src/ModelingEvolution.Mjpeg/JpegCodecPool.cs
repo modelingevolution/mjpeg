@@ -8,8 +8,8 @@ namespace ModelingEvolution.Mjpeg;
 /// </summary>
 public sealed class JpegCodecPool : ICodecPool
 {
-    private readonly ConcurrentBag<nint> _encoderPool = new();
-    private readonly ConcurrentBag<nint> _decoderPool = new();
+    private readonly ConcurrentQueue<nint> _encoderPool = new();
+    private readonly ConcurrentQueue<nint> _decoderPool = new();
     private readonly int _maxWidth;
     private readonly int _maxHeight;
     private readonly int _quality;
@@ -35,7 +35,7 @@ public sealed class JpegCodecPool : ICodecPool
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_encoderPool.TryTake(out var encoder))
+        if (_encoderPool.TryDequeue(out var encoder))
         {
             return encoder;
         }
@@ -65,7 +65,7 @@ public sealed class JpegCodecPool : ICodecPool
             return;
         }
 
-        _encoderPool.Add(encoder);
+        _encoderPool.Enqueue(encoder);
     }
 
     /// <summary>
@@ -76,7 +76,7 @@ public sealed class JpegCodecPool : ICodecPool
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_decoderPool.TryTake(out var decoder))
+        if (_decoderPool.TryDequeue(out var decoder))
         {
             return decoder;
         }
@@ -104,7 +104,7 @@ public sealed class JpegCodecPool : ICodecPool
             return;
         }
 
-        _decoderPool.Add(decoder);
+        _decoderPool.Enqueue(decoder);
     }
 
     /// <summary>
@@ -239,13 +239,13 @@ public sealed class JpegCodecPool : ICodecPool
         _disposed = true;
 
         // Drain and close all encoders
-        while (_encoderPool.TryTake(out var encoder))
+        while (_encoderPool.TryDequeue(out var encoder))
         {
             JpegTurboNative.Close(encoder);
         }
 
         // Drain and close all decoders
-        while (_decoderPool.TryTake(out var decoder))
+        while (_decoderPool.TryDequeue(out var decoder))
         {
             JpegTurboNative.CloseDecoder(decoder);
         }

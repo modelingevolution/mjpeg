@@ -149,11 +149,11 @@ public sealed class JpegCodec : IJpegCodec
         if (result == 0)
             throw new InvalidOperationException("Failed to read JPEG header.");
 
-        // Allocate output buffer for grayscale
+        // Rent output buffer for grayscale from pool
         var outputSize = info.Width * info.Height;
-        var output = new byte[outputSize];
+        var outputOwner = MemoryPool<byte>.Shared.Rent(outputSize);
 
-        using var outputHandle = output.AsMemory().Pin();
+        using var outputHandle = outputOwner.Memory.Pin();
 
         var bytesWritten = JpegTurboNative.DecoderDecodeGray(
             _decoderPtr,
@@ -164,10 +164,13 @@ public sealed class JpegCodec : IJpegCodec
             out info);
 
         if (bytesWritten == 0)
+        {
+            outputOwner.Dispose();
             throw new InvalidOperationException("Failed to decode JPEG image.");
+        }
 
         var header = new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.Gray8, (int)bytesWritten);
-        return new FrameImage(header, output);
+        return new FrameImage(header, outputOwner);
     }
 
     /// <inheritdoc/>
@@ -206,11 +209,11 @@ public sealed class JpegCodec : IJpegCodec
         if (result == 0)
             throw new InvalidOperationException("Failed to read JPEG header.");
 
-        // Allocate output buffer for I420 (width * height * 1.5)
+        // Rent output buffer for I420 (width * height * 1.5) from pool
         int outputSize = info.Width * info.Height * 3 / 2;
-        var output = new byte[outputSize];
+        var outputOwner = MemoryPool<byte>.Shared.Rent(outputSize);
 
-        using var outputHandle = output.AsMemory().Pin();
+        using var outputHandle = outputOwner.Memory.Pin();
 
         var bytesWritten = JpegTurboNative.DecoderDecodeI420(
             _decoderPtr,
@@ -221,10 +224,13 @@ public sealed class JpegCodec : IJpegCodec
             out info);
 
         if (bytesWritten == 0)
+        {
+            outputOwner.Dispose();
             throw new InvalidOperationException("Failed to decode JPEG image to I420.");
+        }
 
         var header = new FrameHeader(info.Width, info.Height, info.Width, PixelFormat.I420, (int)bytesWritten);
-        return new FrameImage(header, output);
+        return new FrameImage(header, outputOwner);
     }
 
     /// <inheritdoc/>
