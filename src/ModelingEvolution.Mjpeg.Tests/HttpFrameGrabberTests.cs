@@ -3,6 +3,7 @@ using Xunit;
 
 namespace ModelingEvolution.Mjpeg.Tests;
 
+[Trait("Category", "Integration")]
 public class HttpFrameGrabberTests
 {
     [Fact]
