@@ -67,7 +67,6 @@ jobs:
           /p:PackageVersion=${{ steps.version.outputs.VERSION }}
         dotnet pack src/ModelingEvolution.Mjpeg.Wasm/ModelingEvolution.Mjpeg.Wasm.csproj \
           --configuration Release \
-          --no-build \
           --output ./artifacts \
           /p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
