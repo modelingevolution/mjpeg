@@ -27,6 +27,5 @@
     <None Include="native\LibJpegWrap.o" Pack="true" PackagePath="buildTransitive\native\" />
     <None Include="native\libjpeg.a" Pack="true" PackagePath="buildTransitive\native\" />
     <None Include="buildTransitive\ModelingEvolution.Mjpeg.Wasm.targets" Pack="true" PackagePath="buildTransitive\" />
-    <None Include="buildTransitive\ModelingEvolution.Mjpeg.Wasm.targets" Pack="true" PackagePath="build\" />
   </ItemGroup>
 </Project>
