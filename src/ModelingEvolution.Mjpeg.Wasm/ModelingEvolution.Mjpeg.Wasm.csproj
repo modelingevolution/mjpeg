@@ -18,6 +18,10 @@
     <PackageReference Include="SkiaSharp" Version="3.119.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
   <!-- Bundle native WASM files so consumers get NativeFileReference automatically -->
   <ItemGroup>
     <None Include="native\LibJpegWrap.o" Pack="true" PackagePath="build\net10.0\native\" />
