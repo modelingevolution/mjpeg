@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>1.0.0</Version>
+    <PackageId>ModelingEvolution.Mjpeg.Wasm</PackageId>
+    <Title>ModelingEvolution MJPEG WASM Decoder</Title>
+    <Description>Multi-threaded JPEG decode pipeline for Blazor WebAssembly using libjpeg-turbo compiled to WASM. Decodes directly into SKBitmap buffers with zero-copy. Requires WasmEnableThreads.</Description>
+    <PackageTags>MJPEG;JPEG;WebAssembly;WASM;SkiaSharp;Blazor;Threading;libjpeg-turbo</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ModelingEvolution.Mjpeg.Wasm.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+  </ItemGroup>
+
+  <!-- Bundle native WASM files so consumers get NativeFileReference automatically -->
+  <ItemGroup>
+    <None Include="native\LibJpegWrap.o" Pack="true" PackagePath="build\net10.0\native\" />
+    <None Include="native\libjpeg.a" Pack="true" PackagePath="build\net10.0\native\" />
+    <None Include="buildTransitive\ModelingEvolution.Mjpeg.Wasm.targets" Pack="true" PackagePath="buildTransitive\" />
+    <None Include="buildTransitive\ModelingEvolution.Mjpeg.Wasm.targets" Pack="true" PackagePath="build\" />
+  </ItemGroup>
+</Project>

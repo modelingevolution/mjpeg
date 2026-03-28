@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup>
+    <NativeFileReference Include="$(MSBuildThisFileDirectory)..\build\net10.0\native\LibJpegWrap.o" />
+    <NativeFileReference Include="$(MSBuildThisFileDirectory)..\build\net10.0\native\libjpeg.a" />
+  </ItemGroup>
+</Project>

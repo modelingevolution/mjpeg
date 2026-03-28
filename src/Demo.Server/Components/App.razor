@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MJPEG Demo</title>
+    <base href="/" />
+    <HeadOutlet />
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #1a1a2e; color: #e0e0e0; }
+        nav { background: #16213e; padding: 10px 20px; display: flex; gap: 20px; align-items: center; }
+        nav a { color: #00d4ff; text-decoration: none; font-weight: bold; }
+        nav a:hover { color: #00a8cc; }
+        nav .brand { font-size: 1.2em; margin-right: 20px; }
+        main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+        h1 { color: #00d4ff; }
+        h3 { color: #a0c4ff; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a class="brand" href="/">MJPEG Demo</a>
+        <a href="/">Home</a>
+        <a href="/player-view">Player (iframe)</a>
+        <a href="/player/">Player (direct)</a>
+    </nav>
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

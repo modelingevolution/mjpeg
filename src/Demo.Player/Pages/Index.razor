@@ -1,0 +1,338 @@
+@page "/"
+@using System.Collections.Concurrent
+@using System.Diagnostics
+@using System.Threading
+@using ModelingEvolution.Mjpeg.Wasm
+@using SkiaSharp
+@using SkiaSharp.Views.Blazor
+
+<h3>MJPEG Player (MT WASM)</h3>
+
+<p>
+    <label>Target FPS:
+        <select @bind="_targetFps" disabled="@_running">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="30">30</option>
+            <option value="60">60</option>
+        </select>
+    </label>
+    <button @onclick="TogglePlayback">@(_running ? "Stop" : "Start")</button>
+    <span style="margin-left:10px;">@_status</span>
+</p>
+
+<SKCanvasView @ref="_canvasView" OnPaintSurface="OnPaintSurface"
+              EnableRenderLoop="@_running"
+              style="width:960px; height:540px; border:1px solid #444;" />
+
+@if (_results != null)
+{
+    <pre style="background:#16213e; padding:12px; border-radius:4px; margin-top:10px; font-size:14px; line-height:1.6;">
+Target FPS:       @_results.TargetFps
+Duration:         @($"{_results.Duration.TotalSeconds:F1}")s
+Frames produced:  @_results.FramesProduced  (attempted at target FPS)
+Decoder drops:    @_results.DecoderDrops  (decoder busy, frame dropped)
+Frames pushed:    @_results.FramesPushed  (entered pipeline)
+Frames decoded:   @_results.FramesDecoded
+Frames rendered:  @_results.FramesRendered
+Renderer drops:   @_results.RendererDrops  (decoded faster than paint)
+Actual FPS:       @($"{_results.ActualFps:F1}")
+Avg decode time:  @($"{_results.AvgDecodeMs:F1}")ms
+Pipeline kept up: @(_results.FramesDecoded == _results.FramesPushed ? "YES (decoded == pushed)" : $"NO (decoded {_results.FramesDecoded} < pushed {_results.FramesPushed})")
+    </pre>
+}
+
+@code {
+    private const int Width = 1920;
+    private const int Height = 1080;
+    private const int BitmapPoolSize = 6;
+    private const double DurationSeconds = 5.0;
+
+    private SKCanvasView? _canvasView;
+    private int _targetFps = 30;
+    private bool _running;
+    private string _status = "Ready";
+    private StressTestResults? _results;
+
+    // Pre-generated JPEG data (4 distinct patterns)
+    private byte[][]? _jpegFrames;
+
+    // Bitmap pool for decode targets
+    private readonly ConcurrentBag<SKBitmap> _bitmapPool = new();
+
+    // Pipeline reference for OnPaintSurface to TryRead from
+    private WasmJpegDecodePipeline? _pipeline;
+
+    // Current frame being displayed (kept between paints)
+    private SKBitmap? _currentBitmap;
+
+    // Counters
+    private int _framesProduced;
+    private int _decoderDrops;
+    private int _framesPushed;
+    private int _framesDecoded;
+    private int _framesRendered;
+    private int _rendererDrops;
+    private long _totalDecodeTicks;
+    private bool _rendererThreadLogged;
+
+    private CancellationTokenSource? _cts;
+
+    private async Task TogglePlayback()
+    {
+        if (_running)
+        {
+            _cts?.Cancel();
+            return;
+        }
+
+        _running = true;
+        _results = null;
+        _status = "Generating test frames...";
+        StateHasChanged();
+        await Task.Yield();
+
+        try
+        {
+            _jpegFrames ??= GenerateTestFrames();
+
+            // Initialize bitmap pool
+            while (_bitmapPool.Count < BitmapPoolSize)
+                _bitmapPool.Add(new SKBitmap(Width, Height, SKColorType.Bgra8888, SKAlphaType.Opaque));
+
+            // Reset counters
+            _framesProduced = 0;
+            _decoderDrops = 0;
+            _framesPushed = 0;
+            _framesDecoded = 0;
+            _framesRendered = 0;
+            _rendererDrops = 0;
+            _totalDecodeTicks = 0;
+            _currentBitmap = null;
+            _rendererThreadLogged = false;
+
+            _cts = new CancellationTokenSource();
+            var ct = _cts.Token;
+
+            await using var pipeline = new WasmJpegDecodePipeline(Width, Height, workerCount: 2);
+            _pipeline = pipeline;
+
+            _status = "Running...";
+            StateHasChanged();
+            await Task.Yield();
+
+            Console.WriteLine($"[MAIN] Thread {Thread.CurrentThread.ManagedThreadId} - main thread free for rendering");
+
+            // Producer runs on a dedicated thread via Task.Run (web worker with WasmEnableThreads)
+            var jpegFrames = _jpegFrames;
+            var bitmapPool = _bitmapPool;
+            var targetFps = _targetFps;
+            var overallSw = new Stopwatch();
+            var producerTask = Task.Run(async () =>
+            {
+                Console.WriteLine($"[PRODUCER] Thread {Thread.CurrentThread.ManagedThreadId} - producer started at {targetFps} FPS");
+                overallSw.Start();
+
+                using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000.0 / targetFps));
+
+                while (!ct.IsCancellationRequested && overallSw.Elapsed.TotalSeconds < DurationSeconds)
+                {
+                    Interlocked.Increment(ref _framesProduced);
+
+                    var frameIndex = (_framesProduced - 1) % jpegFrames.Length;
+
+                    if (!bitmapPool.TryTake(out var bitmap))
+                    {
+                        // Pool empty — all bitmaps in flight, drop this frame
+                        Interlocked.Increment(ref _decoderDrops);
+                        await timer.WaitForNextTickAsync(ct);
+                        continue;
+                    }
+
+                    var frameId = (ulong)(_framesProduced - 1);
+                    var posted = pipeline.Post(new DecodeRequest(frameId, jpegFrames[frameIndex], bitmap));
+                    if (posted)
+                    {
+                        Interlocked.Increment(ref _framesPushed);
+                    }
+                    else
+                    {
+                        // Decoder queue full — drop this frame, return bitmap to pool
+                        Interlocked.Increment(ref _decoderDrops);
+                        bitmapPool.Add(bitmap);
+                    }
+
+                    await timer.WaitForNextTickAsync(ct);
+                }
+
+                Console.WriteLine($"[PRODUCER] Done: {_framesProduced} frames in {overallSw.Elapsed.TotalSeconds:F2}s");
+            }, ct);
+
+            // Wait for the producer to finish (main thread is free for OnPaintSurface during this await)
+            await producerTask;
+
+            overallSw.Stop();
+            _pipeline = null;
+
+            // Drain any remaining decoded frames
+            while (pipeline.TryRead(out var leftover))
+            {
+                _framesDecoded++;
+                _bitmapPool.Add(leftover.Bitmap);
+            }
+
+            _running = false;
+
+            _results = new StressTestResults
+            {
+                TargetFps = _targetFps,
+                Duration = overallSw.Elapsed,
+                FramesProduced = _framesProduced,
+                DecoderDrops = _decoderDrops,
+                FramesPushed = _framesPushed,
+                FramesDecoded = _framesDecoded,
+                FramesRendered = _framesRendered,
+                RendererDrops = _rendererDrops,
+                ActualFps = _framesRendered / overallSw.Elapsed.TotalSeconds,
+                AvgDecodeMs = _framesDecoded > 0
+                    ? (double)_totalDecodeTicks / _framesDecoded / (Stopwatch.Frequency / 1000.0)
+                    : 0
+            };
+
+            _status = "Complete";
+        }
+        catch (OperationCanceledException)
+        {
+            _status = "Stopped";
+            _pipeline = null;
+        }
+        catch (Exception ex)
+        {
+            _status = $"Error: {ex.Message}";
+            _pipeline = null;
+        }
+        finally
+        {
+            _running = false;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void OnPaintSurface(SKPaintSurfaceEventArgs e)
+    {
+        if (!_rendererThreadLogged)
+        {
+            Console.WriteLine($"[RENDERER] Thread {Thread.CurrentThread.ManagedThreadId} - OnPaintSurface");
+            _rendererThreadLogged = true;
+        }
+
+        var canvas = e.Surface.Canvas;
+
+        // Drain pipeline output — grab the latest decoded frame, drop older ones
+        var gotNewFrame = false;
+        var pipeline = _pipeline;
+        if (pipeline != null)
+        {
+            while (pipeline.TryRead(out var result))
+            {
+                if (!result.Success)
+                {
+                    _bitmapPool.Add(result.Bitmap);
+                    continue;
+                }
+
+                // Accumulate decode time measured on the decoder thread
+                Interlocked.Add(ref _totalDecodeTicks, result.DecodeTicks);
+
+                _framesDecoded++;
+
+                // If we already got a new frame this paint, the previous new one is dropped
+                if (gotNewFrame)
+                    _rendererDrops++;
+
+                // Return previous bitmap to pool, swap in new one
+                var old = _currentBitmap;
+                _currentBitmap = result.Bitmap;
+                gotNewFrame = true;
+
+                if (old != null)
+                    _bitmapPool.Add(old);
+            }
+        }
+
+        // Draw current frame
+        canvas.Clear(SKColors.Black);
+        if (_currentBitmap != null)
+        {
+            if (gotNewFrame)
+                _framesRendered++;
+            var destRect = new SKRect(0, 0, e.Info.Width, e.Info.Height);
+            canvas.DrawBitmap(_currentBitmap, destRect);
+        }
+    }
+
+    private byte[][] GenerateTestFrames()
+    {
+        var patterns = new[]
+        {
+            (Label: "Frame A", BaseHue: 0f),
+            (Label: "Frame B", BaseHue: 120f),
+            (Label: "Frame C", BaseHue: 240f),
+            (Label: "Frame D", BaseHue: 60f),
+        };
+
+        var cornerColors = new[] { SKColors.Red, SKColors.Green, SKColors.Blue, SKColors.Yellow };
+        var frames = new byte[patterns.Length][];
+
+        for (int i = 0; i < patterns.Length; i++)
+        {
+            var p = patterns[i];
+            using var bmp = new SKBitmap(Width, Height, SKColorType.Bgra8888, SKAlphaType.Opaque);
+            using var canvas = new SKCanvas(bmp);
+            using var paint = new SKPaint();
+
+            for (int y = 0; y < Height; y += 4)
+            {
+                var hue = (p.BaseHue + (float)y / Height * 180f) % 360f;
+                paint.Color = SKColor.FromHsl(hue, 80, 50);
+                canvas.DrawRect(0, y, Width, 4, paint);
+            }
+
+            paint.Color = SKColors.White;
+            paint.IsAntialias = true;
+            using var fontLarge = new SKFont(SKTypeface.Default, 72);
+            canvas.DrawText(p.Label, Width / 2f, Height / 2f, SKTextAlign.Center, fontLarge, paint);
+
+            using var fontSmall = new SKFont(SKTypeface.Default, 36);
+            canvas.DrawText($"{Width}x{Height}", 20, Height - 20, SKTextAlign.Left, fontSmall, paint);
+
+            paint.Color = cornerColors[i];
+            canvas.DrawRect(0, 0, 80, 80, paint);
+            canvas.DrawRect(Width - 80, 0, 80, 80, paint);
+            canvas.DrawRect(0, Height - 80, 80, 80, paint);
+            canvas.DrawRect(Width - 80, Height - 80, 80, 80, paint);
+
+            using var image = SKImage.FromBitmap(bmp);
+            using var data = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+            frames[i] = data.ToArray();
+        }
+
+        return frames;
+    }
+
+    private record StressTestResults
+    {
+        public int TargetFps { get; init; }
+        public TimeSpan Duration { get; init; }
+        public int FramesProduced { get; init; }
+        public int DecoderDrops { get; init; }
+        public int FramesPushed { get; init; }
+        public int FramesDecoded { get; init; }
+        public int FramesRendered { get; init; }
+        public int RendererDrops { get; init; }
+        public double ActualFps { get; init; }
+        public double AvgDecodeMs { get; init; }
+    }
+}

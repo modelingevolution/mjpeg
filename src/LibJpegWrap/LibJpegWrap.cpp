@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <jpeglib.h>
 #include <cstdlib>
+#include <setjmp.h>
 
 typedef unsigned char byte;
 typedef unsigned long ulong;
@@ -422,6 +423,93 @@ public:
 };
 typedef struct I420Decoder I420Decoder;
 
+// Custom error handler — sets flag instead of calling exit()
+// CRITICAL for WASM: default jpeg_error_exit calls exit() which kills the entire app.
+// NOTE: setjmp/longjmp is not used because the .NET WASM runtime's linker
+// (-mllvm -wasm-enable-sjlj) is incompatible with Emscripten's JS-based
+// setjmp/longjmp emulation. Flag-based error recovery avoids this issue.
+struct safe_error_mgr {
+    struct jpeg_error_mgr pub;
+    bool has_error;
+};
+
+static void safe_error_exit(j_common_ptr cinfo) {
+    safe_error_mgr* myerr = (safe_error_mgr*)cinfo->err;
+    myerr->has_error = true;
+    // Do NOT call exit() — just set the flag and return.
+    // The caller checks has_error after each libjpeg call.
+}
+
+// BGRA Decoder — reuses jpeg_decompress_struct, safe error handling
+class BgraDecoder {
+public:
+    struct jpeg_decompress_struct cinfo;
+    safe_error_mgr jerr;
+    int max_width;
+    int max_height;
+
+    BgraDecoder(int maxWidth, int maxHeight)
+        : max_width(maxWidth), max_height(maxHeight)
+    {
+        cinfo.err = jpeg_std_error(&jerr.pub);
+        jerr.pub.error_exit = safe_error_exit;
+        jerr.has_error = false;
+        jpeg_create_decompress(&cinfo);
+    }
+
+    ~BgraDecoder() { jpeg_destroy_decompress(&cinfo); }
+
+    ulong DecodeBGRA(const byte* jpegData, ulong jpegSize,
+                     byte* output, ulong outputSize, DecodeInfo* info)
+    {
+        jerr.has_error = false;
+
+        jpeg_memory_src(&cinfo, jpegData, jpegSize);
+        if (jerr.has_error) { jpeg_abort_decompress(&cinfo); return 0; }
+
+        if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK || jerr.has_error) {
+            jpeg_abort_decompress(&cinfo);
+            return 0;
+        }
+
+        cinfo.out_color_space = JCS_EXT_BGRA;  // Direct BGRA — libjpeg-turbo extension
+        cinfo.raw_data_out = FALSE;
+
+        jpeg_start_decompress(&cinfo);
+        if (jerr.has_error) { jpeg_abort_decompress(&cinfo); return 0; }
+
+        int width = cinfo.output_width;
+        int height = cinfo.output_height;
+        int rowBytes = width * 4;
+        ulong totalSize = (ulong)rowBytes * height;
+
+        info->width = width;
+        info->height = height;
+        info->components = 4;
+        info->colorSpace = cinfo.out_color_space;
+
+        if (totalSize > outputSize) {
+            jpeg_abort_decompress(&cinfo);
+            return 0;
+        }
+
+        // Read scanlines directly into caller's buffer
+        while (cinfo.output_scanline < cinfo.output_height) {
+            byte* rowPtr = output + cinfo.output_scanline * rowBytes;
+            jpeg_read_scanlines(&cinfo, &rowPtr, 1);
+            if (jerr.has_error) { jpeg_abort_decompress(&cinfo); return 0; }
+        }
+
+        jpeg_finish_decompress(&cinfo);
+        if (jerr.has_error) {
+            // Struct may be in a dirty state — abort defensively before reuse
+            jpeg_abort_decompress(&cinfo);
+            return 0;
+        }
+        return totalSize;
+    }
+};
+
 // Decode JPEG to grayscale (for HDR blending)
 // Returns: bytes written to output, or 0 on error
 // Output format: 8-bit grayscale, row-major
@@ -672,5 +760,20 @@ extern "C" {
 
     EXPORT void CloseDecoder(I420Decoder* decoder) {
         delete decoder;
+    }
+
+    // BGRA decoder functions (safe error handling for WASM)
+    EXPORT BgraDecoder* CreateBgraDecoder(int maxWidth, int maxHeight) {
+        return new BgraDecoder(maxWidth, maxHeight);
+    }
+
+    EXPORT void CloseBgraDecoder(BgraDecoder* decoder) {
+        delete decoder;
+    }
+
+    EXPORT ulong DecoderDecodeBGRA(BgraDecoder* decoder,
+        const byte* jpegData, ulong jpegSize,
+        byte* output, ulong outputSize, DecodeInfo* info) {
+        return decoder->DecodeBGRA(jpegData, jpegSize, output, outputSize, info);
     }
 }

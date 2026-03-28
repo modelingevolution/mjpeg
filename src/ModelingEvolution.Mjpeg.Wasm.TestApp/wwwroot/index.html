@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MJPEG WASM Decode Benchmark</title>
+    <base href="/" />
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 20px; background: #1a1a2e; color: #e0e0e0; }
+        main { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #00d4ff; }
+        h2 { color: #a0c4ff; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #333; padding: 8px 12px; text-align: left; }
+        th { background: #16213e; color: #00d4ff; }
+        tr:nth-child(even) { background: #0f3460; }
+        button { background: #00d4ff; color: #1a1a2e; border: none; padding: 10px 20px; margin: 5px; cursor: pointer; font-weight: bold; border-radius: 4px; }
+        button:hover { background: #00a8cc; }
+        button:disabled { background: #555; color: #999; cursor: not-allowed; }
+        .pass { color: #00ff88; font-weight: bold; }
+        .fail { color: #ff4444; font-weight: bold; }
+        .running { color: #ffaa00; }
+        .log { background: #0f3460; padding: 10px; margin: 10px 0; border-radius: 4px; font-family: monospace; font-size: 13px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+        #app { padding: 10px; }
+        .loading-progress { position: relative; display: block; width: 200px; height: 200px; margin: 20% auto; }
+        .loading-progress circle { fill: none; stroke: #00d4ff; stroke-width: 2; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <svg class="loading-progress">
+            <circle r="40%" cx="50%" cy="50%" />
+            <circle r="40%" cx="50%" cy="50%" />
+        </svg>
+        <p style="text-align:center;color:#aaa;">Loading WASM...</p>
+    </div>
+
+    <div id="blazor-error-ui" style="display:none;background:#ff4444;color:white;padding:10px;text-align:center;">
+        An unhandled error has occurred.
+        <a href="" style="color:white;">Reload</a>
+    </div>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+</html>

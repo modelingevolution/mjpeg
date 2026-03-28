@@ -1,0 +1,17 @@
+@page "/"
+
+<h1>MJPEG Demo</h1>
+<p>This demo shows the 3-project architecture for MJPEG decoding with multi-threaded WASM.</p>
+
+<h3>Architecture</h3>
+<ul>
+    <li><strong>Demo.Server</strong> -- ASP.NET Core host with Blazor SSR pages, serves both Client and Player</li>
+    <li><strong>Demo.Client</strong> -- Blazor WASM (no threading), interactive components via <code>blazor.web.js</code></li>
+    <li><strong>Demo.Player</strong> -- Standalone Blazor WASM with <code>WasmEnableThreads=true</code>, uses <code>blazor.webassembly.js</code></li>
+</ul>
+
+<h3>Navigation</h3>
+<ul>
+    <li><a href="/player-view">Player (iframe)</a> -- Demo.Client page embedding the Player in an iframe</li>
+    <li><a href="/player/">Player (direct)</a> -- Direct access to the standalone Player WASM app</li>
+</ul>

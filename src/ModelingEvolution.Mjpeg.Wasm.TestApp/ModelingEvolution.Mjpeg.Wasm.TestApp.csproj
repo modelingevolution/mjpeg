@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <WasmEnableThreads>true</WasmEnableThreads>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>1.0.0</Version>
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ModelingEvolution.Mjpeg.Wasm\ModelingEvolution.Mjpeg.Wasm.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.0" />
+    <ProjectReference Include="..\..\..\blazor-blaze\extern\SkiaSharp.Views.Blazor.Patched\SkiaSharp.Views.Blazor.Patched.csproj" />
+    <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="3.119.1" />
+  </ItemGroup>
+
+  <!-- SkiaSharp interop JS stub for Emscripten linker (InterceptBrowserObjects).
+       The ModelingEvolution.SkiaSharp.Views.Blazor NuGet includes this in buildTransitive/
+       but doesn't register it as EmccExtraJSLibrary. Manual workaround until package is fixed. -->
+  <!-- Native WASM files for LibJpegWrap BGRA decoder.
+       NativeFileReference does NOT flow transitively from library ProjectReference,
+       so these must be declared in the app project that does the final WASM link. -->
+  <ItemGroup>
+    <NativeFileReference Include="..\ModelingEvolution.Mjpeg.Wasm\native\LibJpegWrap.o" />
+    <NativeFileReference Include="..\ModelingEvolution.Mjpeg.Wasm\native\libjpeg.a" />
+  </ItemGroup>
+</Project>

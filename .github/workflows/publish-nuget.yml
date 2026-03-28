@@ -29,6 +29,9 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
+    - name: Install wasm-tools workload
+      run: dotnet workload install wasm-tools
+
     - name: Set version
       id: version
       run: |
@@ -41,19 +44,28 @@ jobs:
         echo "Publishing version: $VERSION"
 
     - name: Restore dependencies
-      run: dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
+      run: |
+        dotnet restore src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj
+        dotnet restore src/ModelingEvolution.Mjpeg.Wasm/ModelingEvolution.Mjpeg.Wasm.csproj
 
-    - name: Build library
-      run: dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
+    - name: Build libraries
+      run: |
+        dotnet build src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
+        dotnet build src/ModelingEvolution.Mjpeg.Wasm/ModelingEvolution.Mjpeg.Wasm.csproj --configuration Release --no-restore /p:Version=${{ steps.version.outputs.VERSION }}
 
     - name: Run tests
       run: |
         dotnet restore src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj
         dotnet test src/ModelingEvolution.Mjpeg.Tests/ModelingEvolution.Mjpeg.Tests.csproj --configuration Release --verbosity normal --filter "Category!=Integration"
 
-    - name: Pack NuGet package
+    - name: Pack NuGet packages
       run: |
         dotnet pack src/ModelingEvolution.Mjpeg/ModelingEvolution.Mjpeg.csproj \
+          --configuration Release \
+          --no-build \
+          --output ./artifacts \
+          /p:PackageVersion=${{ steps.version.outputs.VERSION }}
+        dotnet pack src/ModelingEvolution.Mjpeg.Wasm/ModelingEvolution.Mjpeg.Wasm.csproj \
           --configuration Release \
           --no-build \
           --output ./artifacts \
