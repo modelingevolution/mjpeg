@@ -54,6 +54,13 @@ internal static class JpegTurboNative
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int GetJpegImageInfo(nint jpegData, ulong jpegSize, out DecodeInfo info);
 
+    // Rgb24 decode/encode (stateless; linux-x64 native only in this release)
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ulong DecodeJpegToRgb24(nint jpegData, ulong jpegSize, nint output, ulong outputSize, out DecodeInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ulong EncodeRgb24ToJpeg(nint rgbData, int width, int height, int stride, int quality, int subsampling, nint output, ulong outputSize);
+
     /// <summary>
     /// Decode result info from native library.
     /// </summary>

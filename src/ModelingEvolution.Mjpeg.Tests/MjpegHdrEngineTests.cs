@@ -182,6 +182,12 @@ internal sealed class MockJpegCodec : IJpegCodec
         return new FrameImage(header, data);
     }
 
+    // The HDR engine never uses Rgb24; these members exist only to satisfy IJpegCodec.
+    public FrameHeader DecodeRgb24(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer) => throw new NotSupportedException();
+    public FrameImage DecodeRgb24(ReadOnlyMemory<byte> jpegData) => throw new NotSupportedException();
+    public int EncodeRgb24(in FrameImage frame, int quality, Memory<byte> outputBuffer, JpegSubsampling subsampling = JpegSubsampling.Ratio420) => throw new NotSupportedException();
+    public FrameImage EncodeRgb24(in FrameImage frame, int quality, JpegSubsampling subsampling = JpegSubsampling.Ratio420) => throw new NotSupportedException();
+
     public int Encode(in FrameImage frame, Memory<byte> outputBuffer)
     {
         EncodeCallCount++;

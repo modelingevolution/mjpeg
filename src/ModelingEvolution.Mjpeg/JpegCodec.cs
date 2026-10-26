@@ -298,6 +298,146 @@ public sealed class JpegCodec : IJpegCodec
         return new FrameImage(header, owner);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>Stateless native call: safe to use concurrently on one codec instance.</remarks>
+    public unsafe FrameHeader DecodeRgb24(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var inputHandle = jpegData.Pin();
+        using var outputHandle = outputBuffer.Pin();
+
+        nint input = (nint)inputHandle.Pointer;
+        nint output = (nint)outputHandle.Pointer;
+        ulong inputLength = (ulong)jpegData.Length;
+        ulong outputLength = (ulong)outputBuffer.Length;
+
+        var (bytesWritten, info) = RequireRgb24Support(() =>
+        {
+            var n = JpegTurboNative.DecodeJpegToRgb24(input, inputLength, output, outputLength, out var decoded);
+            return (n, decoded);
+        });
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to decode JPEG image to Rgb24 (corrupt data or output buffer too small).");
+
+        return new FrameHeader(info.Width, info.Height, info.Width * 3, PixelFormat.Rgb24, (int)bytesWritten);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>Stateless native call: safe to use concurrently on one codec instance.</remarks>
+    public unsafe FrameImage DecodeRgb24(ReadOnlyMemory<byte> jpegData)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        FrameHeader info;
+        using (var inputHandle = jpegData.Pin())
+        {
+            if (JpegTurboNative.GetJpegImageInfo((nint)inputHandle.Pointer, (ulong)jpegData.Length, out var header) == 0)
+                throw new InvalidOperationException("Failed to read JPEG header.");
+            info = new FrameHeader(header.Width, header.Height, header.Width * 3, PixelFormat.Rgb24, header.Width * header.Height * 3);
+        }
+
+        var owner = MemoryPool<byte>.Shared.Rent(info.Length);
+        try
+        {
+            var decoded = DecodeRgb24(jpegData, owner.Memory);
+            return new FrameImage(decoded, owner);
+        }
+        catch
+        {
+            owner.Dispose();
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>Stateless native call: safe to use concurrently on one codec instance. Uses the integer DCT.</remarks>
+    public unsafe int EncodeRgb24(in FrameImage frame, int quality, Memory<byte> outputBuffer, JpegSubsampling subsampling = JpegSubsampling.Ratio420)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ValidateRgb24Encode(frame, quality, subsampling);
+
+        using var inputHandle = frame.Data.Pin();
+        using var outputHandle = outputBuffer.Pin();
+        var header = frame.Header;
+        nint input = (nint)inputHandle.Pointer;
+        nint output = (nint)outputHandle.Pointer;
+        ulong outputLength = (ulong)outputBuffer.Length;
+
+        var bytesWritten = RequireRgb24Support(() => JpegTurboNative.EncodeRgb24ToJpeg(
+            input, header.Width, header.Height, header.Stride, quality, (int)subsampling, output, outputLength));
+
+        if (bytesWritten == 0)
+            throw new InvalidOperationException("Failed to encode Rgb24 image to JPEG (output buffer too small or encoder error).");
+
+        return (int)bytesWritten;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Rents a worst-case buffer (libjpeg-turbo's <c>tjBufSize</c> bound for the chosen subsampling) from the shared pool.
+    /// </remarks>
+    public FrameImage EncodeRgb24(in FrameImage frame, int quality, JpegSubsampling subsampling = JpegSubsampling.Ratio420)
+    {
+        ValidateRgb24Encode(frame, quality, subsampling);
+
+        var owner = MemoryPool<byte>.Shared.Rent(MaxJpegSize(frame.Header.Width, frame.Header.Height, subsampling));
+        try
+        {
+            int length = EncodeRgb24(frame, quality, owner.Memory, subsampling);
+            var header = new FrameHeader(frame.Header.Width, frame.Header.Height, length, frame.Header.Format, length);
+            return new FrameImage(header, owner);
+        }
+        catch
+        {
+            owner.Dispose();
+            throw;
+        }
+    }
+
+    private static void ValidateRgb24Encode(in FrameImage frame, int quality, JpegSubsampling subsampling)
+    {
+        var header = frame.Header;
+        if (header.Format != PixelFormat.Rgb24)
+            throw new NotSupportedException($"EncodeRgb24 requires PixelFormat.Rgb24. Got: {header.Format}");
+        if (header.Width <= 0 || header.Height <= 0 || header.Stride < header.Width * 3)
+            throw new ArgumentException($"Invalid Rgb24 frame header: {header}", nameof(frame));
+        long required = (long)header.Stride * (header.Height - 1) + (long)header.Width * 3;
+        if (frame.Data.Length < required)
+            throw new ArgumentException(
+                $"Frame data holds {frame.Data.Length} bytes; {header} needs at least {required}.", nameof(frame));
+        if (quality < 1 || quality > 100)
+            throw new ArgumentOutOfRangeException(nameof(quality), "Quality must be between 1 and 100.");
+        if (!Enum.IsDefined(subsampling))
+            throw new ArgumentOutOfRangeException(nameof(subsampling));
+    }
+
+    // libjpeg-turbo tjBufSize: PAD(w, mcuw) * PAD(h, mcuh) * (2 + chromasf) + 2048, chromasf = 4 * 64 / (mcuw * mcuh).
+    private static int MaxJpegSize(int width, int height, JpegSubsampling subsampling)
+    {
+        int mcu = subsampling == JpegSubsampling.Ratio444 ? 8 : 16;
+        long chroma = 4L * 64 / (mcu * mcu);
+        long size = (long)Pad(width, mcu) * Pad(height, mcu) * (2 + chroma) + 2048;
+        return checked((int)size);
+
+        static int Pad(int v, int p) => (v + p - 1) / p * p;
+    }
+
+    private static T RequireRgb24Support<T>(Func<T> call)
+    {
+        try
+        {
+            return call();
+        }
+        catch (EntryPointNotFoundException e)
+        {
+            throw new NotSupportedException(
+                "Rgb24 JPEG decode/encode is not available in the LibJpegWrap native library for this platform " +
+                $"({System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}); it ships for linux-x64.", e);
+        }
+    }
+
     /// <summary>
     /// Disposes the native encoder and decoder resources.
     /// </summary>
