@@ -174,18 +174,56 @@ public class JpegCodecRgb24Tests
     }
 
     [Fact]
-    public void Gray8AndI420Decode_OfReferenceJpeg_AreUnchanged()
+    public void Gray8AndI420Decode_OfReferenceJpeg_MatchOutputOfPreviousRelease()
     {
+        // gray8-reference.gray / i420-reference.yuv: Decode / DecodeI420 of rgb24-reference.jpg on master add0195 (v1.4.1 natives).
         using var codec = new JpegCodec();
 
         using var gray = codec.Decode(ReferenceJpeg);
         using var i420 = codec.DecodeI420(ReferenceJpeg);
 
         gray.Header.Should().Be(new FrameHeader(RefWidth, RefHeight, RefWidth, PixelFormat.Gray8, RefWidth * RefHeight));
+        gray.Data.ToArray().Should().Equal(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "TestData", "gray8-reference.gray")));
         i420.Header.Format.Should().Be(PixelFormat.I420);
-        i420.Header.Length.Should().Be(RefWidth * RefHeight * 3 / 2);
-        // Gray8 is the JPEG's luma plane, which is also the Y plane of the I420 decode.
-        gray.Data.ToArray().Should().Equal(i420.Data.Slice(0, RefWidth * RefHeight).ToArray());
+        i420.Data.ToArray().Should().Equal(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "TestData", "i420-reference.yuv")));
+    }
+
+    [Fact]
+    public void DecodeRgb24_Pooled_BadSofPrecision_ThrowsInsteadOfExitingProcess()
+    {
+        using var codec = new JpegCodec();
+        var jpeg = ReferenceJpeg;
+        int sof = IndexOfMarker(jpeg, 0xC0);
+        jpeg[sof + 4] = 12; // SOF0 sample precision: baseline libjpeg-turbo supports 8 only -> fatal error in jpeg_read_header
+
+        var act = () => codec.DecodeRgb24(jpeg);
+
+        act.Should().Throw<InvalidOperationException>();
+        using var frame = codec.DecodeRgb24(ReferenceJpeg);
+        frame.Data.ToArray().Should().Equal(ReferenceRgb);
+    }
+
+    [Fact]
+    public void EncodeRgb24_DataShorterThanHeader_ThrowsBeforeNativeCall()
+    {
+        using var codec = new JpegCodec();
+        var (w, h, rgb) = SyntheticImage();
+        // Header claims a padded stride the data does not have.
+        using var frame = new FrameImage(new FrameHeader(w, h, w * 3 + 16, PixelFormat.Rgb24, rgb.Length), rgb);
+
+        var pooled = () => codec.EncodeRgb24(frame, 90);
+        var buffered = () => codec.EncodeRgb24(frame, 90, new byte[rgb.Length * 2]);
+
+        pooled.Should().Throw<ArgumentException>();
+        buffered.Should().Throw<ArgumentException>();
+    }
+
+    private static int IndexOfMarker(byte[] jpeg, byte marker)
+    {
+        for (int i = 0; i < jpeg.Length - 1; i++)
+            if (jpeg[i] == 0xFF && jpeg[i + 1] == marker)
+                return i;
+        throw new InvalidOperationException($"Marker FF{marker:X2} not found.");
     }
 
     // 96x64: smooth gradients (left), a saturated red/blue checker with 4-px cells (middle, or a third gradient

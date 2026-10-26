@@ -356,7 +356,7 @@ public sealed class JpegCodec : IJpegCodec
     public unsafe int EncodeRgb24(in FrameImage frame, int quality, Memory<byte> outputBuffer, JpegSubsampling subsampling = JpegSubsampling.Ratio420)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        ValidateRgb24Encode(frame.Header, quality, subsampling);
+        ValidateRgb24Encode(frame, quality, subsampling);
 
         using var inputHandle = frame.Data.Pin();
         using var outputHandle = outputBuffer.Pin();
@@ -380,7 +380,7 @@ public sealed class JpegCodec : IJpegCodec
     /// </remarks>
     public FrameImage EncodeRgb24(in FrameImage frame, int quality, JpegSubsampling subsampling = JpegSubsampling.Ratio420)
     {
-        ValidateRgb24Encode(frame.Header, quality, subsampling);
+        ValidateRgb24Encode(frame, quality, subsampling);
 
         var owner = MemoryPool<byte>.Shared.Rent(MaxJpegSize(frame.Header.Width, frame.Header.Height, subsampling));
         try
@@ -396,12 +396,17 @@ public sealed class JpegCodec : IJpegCodec
         }
     }
 
-    private static void ValidateRgb24Encode(in FrameHeader header, int quality, JpegSubsampling subsampling)
+    private static void ValidateRgb24Encode(in FrameImage frame, int quality, JpegSubsampling subsampling)
     {
+        var header = frame.Header;
         if (header.Format != PixelFormat.Rgb24)
             throw new NotSupportedException($"EncodeRgb24 requires PixelFormat.Rgb24. Got: {header.Format}");
         if (header.Width <= 0 || header.Height <= 0 || header.Stride < header.Width * 3)
-            throw new ArgumentException($"Invalid Rgb24 frame header: {header}", nameof(header));
+            throw new ArgumentException($"Invalid Rgb24 frame header: {header}", nameof(frame));
+        long required = (long)header.Stride * (header.Height - 1) + (long)header.Width * 3;
+        if (frame.Data.Length < required)
+            throw new ArgumentException(
+                $"Frame data holds {frame.Data.Length} bytes; {header} needs at least {required}.", nameof(frame));
         if (quality < 1 || quality > 100)
             throw new ArgumentOutOfRangeException(nameof(quality), "Quality must be between 1 and 100.");
         if (!Enum.IsDefined(subsampling))

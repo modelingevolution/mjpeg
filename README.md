@@ -226,7 +226,8 @@ using var jpeg = codec.EncodeRgb24(frame, quality: 90);  // Encode() takes I420 
 
 ### Rgb24 Decode/Encode
 
-`Decode`/`Encode` work on Gray8 and I420. For packed Rgb24 (R, G, B) use:
+`Decode`/`Encode` work on Gray8 and I420. For packed Rgb24 (R, G, B) use the four `IJpegCodec` members below
+(added in 1.5.0). **Breaking change for custom `IJpegCodec` implementations:** they must add these four members.
 
 | Method | Result |
 |--------|--------|
@@ -241,6 +242,8 @@ using var jpeg = codec.EncodeRgb24(frame, quality: 90);  // Encode() takes I420 
   chroma at full resolution (sharp coloured edges, larger files). `FrameHeader.Stride` may include row padding.
 - The Rgb24 calls are stateless native calls: they ignore the codec's `Quality`/`DctMethod` and are safe to call
   concurrently on one `JpegCodec`.
+- Errors: `InvalidOperationException` for undecodable data or a too-small output buffer; `ArgumentException` when the
+  frame data is shorter than `Stride * (Height - 1) + Width * 3`; `ArgumentOutOfRangeException` for quality outside 1-100.
 - Platforms: the native Rgb24 entry points ship in the **linux-x64** `LibJpegWrap.so`. On linux-arm64 and win-x64 the
   bundled binaries predate them, and the Rgb24 methods throw `NotSupportedException`.
 

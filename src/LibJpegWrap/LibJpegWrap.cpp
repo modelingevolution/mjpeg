@@ -803,9 +803,20 @@ ulong EncodeRgb24(const byte* rgbData, int width, int height, int stride, int qu
 // Get JPEG dimensions without full decode
 int GetJpegInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
     struct jpeg_decompress_struct cinfo;
+#ifndef __EMSCRIPTEN__
+    // A malformed header (e.g. bad SOF precision) is a fatal libjpeg error; the default handler calls exit().
+    jump_error_mgr jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jump_error_exit;
+    jerr.pub.output_message = silent_output_message;
+    if (setjmp(jerr.jump)) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+#else
     struct jpeg_error_mgr jerr;
-
     cinfo.err = jpeg_std_error(&jerr);
+#endif
     jpeg_create_decompress(&cinfo);
 
     jpeg_memory_src(&cinfo, jpegData, jpegSize);
