@@ -48,6 +48,7 @@
 #include <jpeglib.h>
 #include <cstdlib>
 #include <setjmp.h>
+#include <cstring>
 
 typedef unsigned char byte;
 typedef unsigned long ulong;
@@ -684,6 +685,121 @@ ulong EncodeGray8(const byte* grayData, int width, int height, int quality, byte
     return dataSize;
 }
 
+#ifndef __EMSCRIPTEN__
+// Rgb24 decode/encode (native targets only; the WASM build exposes BGRA decode only).
+// Errors use setjmp/longjmp, the libjpeg-documented recovery: error_exit must not return.
+struct jump_error_mgr {
+    struct jpeg_error_mgr pub;
+    jmp_buf jump;
+};
+
+static void jump_error_exit(j_common_ptr cinfo) {
+    jump_error_mgr* err = (jump_error_mgr*)cinfo->err;
+    longjmp(err->jump, 1);
+}
+
+static void silent_output_message(j_common_ptr) {}
+
+// Decode a JPEG to packed Rgb24 (R, G, B; stride = width * 3) at full resolution.
+// Chroma is upsampled by libjpeg-turbo's default (fancy) upsampling.
+// Returns: bytes written (width * height * 3), or 0 on error / output too small.
+ulong DecodeToRgb24(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+    struct jpeg_decompress_struct cinfo;
+    jump_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jump_error_exit;
+    jerr.pub.output_message = silent_output_message;
+    if (setjmp(jerr.jump)) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, jpegData, jpegSize);
+
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    cinfo.out_color_space = JCS_RGB;
+    cinfo.raw_data_out = FALSE;
+    jpeg_start_decompress(&cinfo);
+
+    ulong rowStride = (ulong)cinfo.output_width * 3;
+    ulong totalSize = rowStride * cinfo.output_height;
+
+    info->width = cinfo.output_width;
+    info->height = cinfo.output_height;
+    info->components = cinfo.output_components;
+    info->colorSpace = cinfo.out_color_space;
+
+    if (totalSize > outputSize) {
+        jpeg_destroy_decompress(&cinfo);
+        return 0;
+    }
+
+    while (cinfo.output_scanline < cinfo.output_height) {
+        byte* rowPtr = output + cinfo.output_scanline * rowStride;
+        jpeg_read_scanlines(&cinfo, &rowPtr, 1);
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    return totalSize;
+}
+
+// Encode packed Rgb24 (R, G, B; rows of `stride` bytes) to a baseline JPEG.
+// subsampling: 0 = 4:2:0 (libjpeg's jpeg_set_defaults), 1 = 4:4:4 (no chroma subsampling).
+// Returns: bytes written to output, or 0 on error / output too small.
+ulong EncodeRgb24(const byte* rgbData, int width, int height, int stride, int quality, int subsampling,
+                  byte* output, ulong outputSize) {
+    struct jpeg_compress_struct cinfo;
+    jump_error_mgr jerr;
+    unsigned char* mem = nullptr;
+    unsigned long memSize = 0;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jump_error_exit;
+    jerr.pub.output_message = silent_output_message;
+    if (setjmp(jerr.jump)) {
+        jpeg_destroy_compress(&cinfo);
+        free(*(unsigned char* volatile*)&mem); // re-read from memory after longjmp
+        return 0;
+    }
+    jpeg_create_compress(&cinfo);
+    jpeg_mem_dest(&cinfo, &mem, &memSize);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+    if (subsampling == 1) {
+        cinfo.comp_info[0].h_samp_factor = 1;
+        cinfo.comp_info[0].v_samp_factor = 1;
+    }
+
+    jpeg_start_compress(&cinfo, TRUE);
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = (JSAMPROW)(rgbData + (ulong)cinfo.next_scanline * stride);
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    ulong written = 0;
+    if (memSize <= outputSize) {
+        memcpy(output, mem, memSize);
+        written = memSize;
+    }
+    free(mem);
+    return written;
+}
+#endif
+
 // Get JPEG dimensions without full decode
 int GetJpegInfo(const byte* jpegData, ulong jpegSize, DecodeInfo* info) {
     struct jpeg_decompress_struct cinfo;
@@ -741,6 +857,15 @@ extern "C" {
         return EncodeGray8(grayData, width, height, quality, output, outputSize);
     }
 
+#ifndef __EMSCRIPTEN__
+    EXPORT ulong DecodeJpegToRgb24(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
+        return DecodeToRgb24(jpegData, jpegSize, output, outputSize, info);
+    }
+    EXPORT ulong EncodeRgb24ToJpeg(const byte* rgbData, int width, int height, int stride, int quality, int subsampling,
+                                   byte* output, ulong outputSize) {
+        return EncodeRgb24(rgbData, width, height, stride, quality, subsampling, output, outputSize);
+    }
+#endif
     EXPORT ulong DecodeJpegToI420(const byte* jpegData, ulong jpegSize, byte* output, ulong outputSize, DecodeInfo* info) {
         return DecodeToI420(jpegData, jpegSize, output, outputSize, info);
     }

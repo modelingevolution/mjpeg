@@ -13,6 +13,18 @@ public enum DctMethod : byte
 }
 
 /// <summary>
+/// Chroma subsampling used when encoding Rgb24 to JPEG.
+/// </summary>
+public enum JpegSubsampling : byte
+{
+    /// <summary>4:2:0 - chroma at half resolution in both directions; libjpeg's default (<c>jpeg_set_defaults</c>).</summary>
+    Ratio420 = 0,
+
+    /// <summary>4:4:4 - chroma at full resolution; larger files, no colour bleeding at sharp edges.</summary>
+    Ratio444 = 1
+}
+
+/// <summary>
 /// JPEG encoding and decoding interface.
 /// Thread-safe for concurrent encoding/decoding operations.
 /// </summary>
@@ -69,6 +81,40 @@ public interface IJpegCodec : IDisposable
     /// <param name="frame">The raw frame to encode.</param>
     /// <returns>FrameImage containing the JPEG data. Caller must dispose.</returns>
     FrameImage Encode(in FrameImage frame);
+
+    /// <summary>
+    /// Decodes JPEG data to packed Rgb24 (R, G, B; stride = width * 3) at full resolution.
+    /// </summary>
+    /// <param name="jpegData">The JPEG compressed data.</param>
+    /// <param name="outputBuffer">Buffer to receive decoded pixels. Must hold at least width * height * 3 bytes.</param>
+    /// <returns>Frame header describing the decoded image (<see cref="PixelFormat.Rgb24"/>).</returns>
+    FrameHeader DecodeRgb24(ReadOnlyMemory<byte> jpegData, Memory<byte> outputBuffer);
+
+    /// <summary>
+    /// Decodes JPEG data to packed Rgb24 (R, G, B; stride = width * 3), renting the output buffer from the shared pool.
+    /// </summary>
+    /// <param name="jpegData">The JPEG compressed data.</param>
+    /// <returns>FrameImage containing the decoded pixels. Caller must dispose.</returns>
+    FrameImage DecodeRgb24(ReadOnlyMemory<byte> jpegData);
+
+    /// <summary>
+    /// Encodes an Rgb24 frame to a baseline JPEG.
+    /// </summary>
+    /// <param name="frame">The frame to encode. Its format must be <see cref="PixelFormat.Rgb24"/>; rows are read with <see cref="FrameHeader.Stride"/>.</param>
+    /// <param name="quality">JPEG quality (1-100), applied with libjpeg's <c>jpeg_set_quality</c> (baseline tables).</param>
+    /// <param name="outputBuffer">Buffer to receive JPEG data. Must be large enough.</param>
+    /// <param name="subsampling">Chroma subsampling; <see cref="JpegSubsampling.Ratio420"/> (libjpeg's default) unless specified.</param>
+    /// <returns>Number of bytes written to outputBuffer.</returns>
+    int EncodeRgb24(in FrameImage frame, int quality, Memory<byte> outputBuffer, JpegSubsampling subsampling = JpegSubsampling.Ratio420);
+
+    /// <summary>
+    /// Encodes an Rgb24 frame to a baseline JPEG, renting the output buffer from the shared pool.
+    /// </summary>
+    /// <param name="frame">The frame to encode. Its format must be <see cref="PixelFormat.Rgb24"/>.</param>
+    /// <param name="quality">JPEG quality (1-100).</param>
+    /// <param name="subsampling">Chroma subsampling; <see cref="JpegSubsampling.Ratio420"/> (libjpeg's default) unless specified.</param>
+    /// <returns>FrameImage containing the JPEG data (Length = encoded size). Caller must dispose.</returns>
+    FrameImage EncodeRgb24(in FrameImage frame, int quality, JpegSubsampling subsampling = JpegSubsampling.Ratio420);
 
     /// <summary>
     /// Default JPEG quality (1-100). Higher values produce better quality but larger files.

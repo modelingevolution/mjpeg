@@ -32,6 +32,10 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="TestData\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Copy native libraries to output for tests -->
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
     <None Include="..\ModelingEvolution.Mjpeg\libs\linux-x64\LibJpegWrap.so" Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'X64'">
