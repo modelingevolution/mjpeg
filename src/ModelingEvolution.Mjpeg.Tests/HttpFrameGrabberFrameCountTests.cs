@@ -14,7 +14,7 @@ public class HttpFrameGrabberFrameCountTests
     private static ReadOnlySequence<byte> Jpeg(byte marker) => new([0xFF, 0xD8, marker, 0xFF, 0xD9]);
 
     [Fact]
-    public void A_frame_is_read_with_its_own_count_while_a_publish_is_in_progress()
+    public async Task A_frame_is_read_with_its_own_count_while_a_publish_is_in_progress()
     {
         using var grabber = new HttpFrameGrabber("127.0.0.1", 1);   // never started: frames are published directly
         grabber.PublishFrame(Jpeg(1), 5);                             // frame 1, count 1
@@ -35,8 +35,8 @@ public class HttpFrameGrabberFrameCountTests
             readerDone.Wait(TimeSpan.FromMilliseconds(500));
         };
 
-        Task.Run(() => grabber.PublishFrame(Jpeg(2), 5)).Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
-        reader!.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await Task.Run(() => grabber.PublishFrame(Jpeg(2), 5)).WaitAsync(TimeSpan.FromSeconds(10));
+        await reader!.WaitAsync(TimeSpan.FromSeconds(10));
 
         seen.Should().Be((2, (byte)2), "frame 2 is read with count 2, the count it was published under");
         grabber.FrameCount.Should().Be(2);
