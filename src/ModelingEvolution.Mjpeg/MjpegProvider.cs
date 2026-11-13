@@ -60,7 +60,7 @@ public sealed class MjpegProvider : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Cached frame dimensions from the first decoded frame.
-    /// Only valid after the first successful <see cref="TryGetFrame"/> call.
+    /// Only valid after the first successful <see cref="TryGetFrame()"/> call.
     /// </summary>
     public FrameHeader FrameHeader => _cachedHeader;
 
