@@ -25,6 +25,11 @@ public sealed class HttpFrameGrabber : IAsyncDisposable, IDisposable
     private readonly Lock _frameLock = new();
     private volatile bool _hasFrame;
     private volatile int _frameCount;
+    // The count _latest was published under; written with _latest, under _frameLock.
+    private int _latestCount;
+
+    /// <summary>Test seam: runs right after a published frame is swapped in, while the publish is still in progress.</summary>
+    internal Action? AfterSwapForTest;
 
     /// <summary>
     /// Creates a new HttpFrameGrabber from explicit host, port, and path.
@@ -55,7 +60,8 @@ public sealed class HttpFrameGrabber : IAsyncDisposable, IDisposable
     public bool HasFrame => _hasFrame;
 
     /// <summary>
-    /// Total number of frames grabbed since start.
+    /// Total number of frames grabbed since start. Read on its own it says nothing about which frame
+    /// <see cref="TryAcquireLatest()"/> returns; use <see cref="TryAcquireLatest(out int)"/> for a frame with its own count.
     /// </summary>
     public int FrameCount => _frameCount;
 
@@ -91,13 +97,23 @@ public sealed class HttpFrameGrabber : IAsyncDisposable, IDisposable
     /// Caller must dispose the handle when done.
     /// Returns null if no frame is available or the frame was just recycled.
     /// </summary>
-    public JpegFrameHandle? TryAcquireLatest()
+    public JpegFrameHandle? TryAcquireLatest() => TryAcquireLatest(out _);
+
+    /// <summary>
+    /// Returns a ref-counted handle to the latest raw JPEG bytes and, in <paramref name="frameCount"/>, the
+    /// <see cref="FrameCount"/> that frame was published under, both from one locked read: a frame is never paired with
+    /// another frame's count. Caller must dispose the handle when done. Returns null (and 0) if no frame is available or
+    /// the frame was just recycled.
+    /// </summary>
+    public JpegFrameHandle? TryAcquireLatest(out int frameCount)
     {
         lock (_frameLock)
         {
             var frame = _latest;
-            if (!frame.IsValid) return null;
-            return frame.TryAddRef() ? frame : null;
+            frameCount = 0;
+            if (!frame.IsValid || !frame.TryAddRef()) return null;
+            frameCount = _latestCount;
+            return frame;
         }
     }
 
@@ -388,7 +404,7 @@ public sealed class HttpFrameGrabber : IAsyncDisposable, IDisposable
         return true;
     }
 
-    private void PublishFrame(ReadOnlySequence<byte> jpegSequence, int length)
+    internal void PublishFrame(ReadOnlySequence<byte> jpegSequence, int length)
     {
         var handle = JpegFrameHandle.Rent(length);
         jpegSequence.CopyTo(handle.DataSpan);
@@ -398,10 +414,12 @@ public sealed class HttpFrameGrabber : IAsyncDisposable, IDisposable
         {
             old = _latest;
             _latest = handle;
+            AfterSwapForTest?.Invoke();
+            // The frame and its count change together, so a reader under the lock sees both or neither.
+            _latestCount = Interlocked.Increment(ref _frameCount);
         }
 
         _hasFrame = true;
-        Interlocked.Increment(ref _frameCount);
 
         if (old.IsValid)
             old.Dispose();

@@ -53,13 +53,14 @@ public sealed class MjpegProvider : IAsyncDisposable, IDisposable
     public bool HasFrame => _grabber.HasFrame;
 
     /// <summary>
-    /// Total number of raw frames grabbed.
+    /// Total number of raw frames grabbed. Read on its own it says nothing about which frame <see cref="TryGetFrame()"/> or
+    /// <see cref="TryAcquireRaw()"/> returns; use their <c>out int frameCount</c> overloads for a frame with its own count.
     /// </summary>
     public int FrameCount => _grabber.FrameCount;
 
     /// <summary>
     /// Cached frame dimensions from the first decoded frame.
-    /// Only valid after the first successful <see cref="TryGetFrame"/> call.
+    /// Only valid after the first successful <see cref="TryGetFrame()"/> call.
     /// </summary>
     public FrameHeader FrameHeader => _cachedHeader;
 
@@ -73,9 +74,15 @@ public sealed class MjpegProvider : IAsyncDisposable, IDisposable
     /// Returns null if no frame is available.
     /// Caller must dispose the returned <see cref="FrameImage"/> to return the buffer to the pool.
     /// </summary>
-    public FrameImage? TryGetFrame()
+    public FrameImage? TryGetFrame() => TryGetFrame(out _);
+
+    /// <summary>
+    /// As <see cref="TryGetFrame()"/>, and <paramref name="frameCount"/> is the <see cref="FrameCount"/> that frame was published
+    /// under, read with the frame in one locked read (<see cref="HttpFrameGrabber.TryAcquireLatest(out int)"/>). 0 when null.
+    /// </summary>
+    public FrameImage? TryGetFrame(out int frameCount)
     {
-        var handle = _grabber.TryAcquireLatest();
+        var handle = _grabber.TryAcquireLatest(out frameCount);
         if (handle == null) return null;
 
         try
@@ -104,6 +111,12 @@ public sealed class MjpegProvider : IAsyncDisposable, IDisposable
     /// Caller must dispose the returned handle.
     /// </summary>
     public JpegFrameHandle? TryAcquireRaw() => _grabber.TryAcquireLatest();
+
+    /// <summary>
+    /// As <see cref="TryAcquireRaw()"/>, and <paramref name="frameCount"/> is the count that frame was published under, from one
+    /// locked read (<see cref="HttpFrameGrabber.TryAcquireLatest(out int)"/>). 0 when null.
+    /// </summary>
+    public JpegFrameHandle? TryAcquireRaw(out int frameCount) => _grabber.TryAcquireLatest(out frameCount);
 
     public async ValueTask DisposeAsync()
     {
