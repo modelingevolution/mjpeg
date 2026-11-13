@@ -42,6 +42,54 @@ public class HttpFrameGrabberFrameCountTests
         grabber.FrameCount.Should().Be(2);
     }
 
+    /// <summary>S-14: the shared feed (<see cref="MjpegProvider"/>) reads a frame with its own count too, while a publish is in progress.</summary>
+    [Fact]
+    public async Task The_provider_reads_a_raw_frame_with_its_own_count_while_a_publish_is_in_progress()
+    {
+        using var grabber = new HttpFrameGrabber("127.0.0.1", 1);
+        using var provider = new MjpegProvider(grabber, new JpegCodec());
+        grabber.PublishFrame(Jpeg(1), 5);
+
+        (int Count, byte Marker)? seen = null;
+        using var readerDone = new ManualResetEventSlim();
+        Task? reader = null;
+        grabber.AfterSwapForTest = () =>
+        {
+            reader = Task.Run(() =>
+            {
+                using var handle = provider.TryAcquireRaw(out var count);
+                seen = (count, handle!.Value.Data.Span[2]);
+                readerDone.Set();
+            });
+            readerDone.Wait(TimeSpan.FromMilliseconds(500));
+        };
+
+        await Task.Run(() => grabber.PublishFrame(Jpeg(2), 5)).WaitAsync(TimeSpan.FromSeconds(10));
+        await reader!.WaitAsync(TimeSpan.FromSeconds(10));
+
+        seen.Should().Be((2, (byte)2), "frame 2 is read with count 2 through the provider");
+    }
+
+    /// <summary>S-14: the provider's decoded frame comes with the count of the frame it decoded.</summary>
+    [Fact]
+    public void The_provider_decodes_a_frame_with_its_own_count()
+    {
+        var jpeg = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "TestData", "rgb24-reference.jpg"));
+        using var grabber = new HttpFrameGrabber("127.0.0.1", 1);
+        using var provider = new MjpegProvider(grabber, new JpegCodec());
+        provider.TryGetFrame(out var none).Should().BeNull();
+        none.Should().Be(0);
+
+        for (var i = 1; i <= 2; i++)
+        {
+            grabber.PublishFrame(new ReadOnlySequence<byte>(jpeg), jpeg.Length);
+            var frame = provider.TryGetFrame(out var count);
+            frame.Should().NotBeNull();
+            frame!.Value.Dispose();
+            count.Should().Be(i);
+        }
+    }
+
     [Fact]
     public void The_count_read_with_a_frame_is_the_count_it_was_published_under()
     {
